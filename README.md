@@ -205,11 +205,13 @@ changes.
 
 ```sh
 swift build          # CLI + injector dylib + menu bar extra (Command Line Tools are enough)
-swift test           # 55 tests, all offline-safe (fixtures, stubbed runners; needs full Xcode)
+swift test           # 47 tests in 11 suites, all offline-safe (fixtures, stubbed runners)
 ./scripts/smoke-test.sh            # pre-release gate (pass --live to exercise real media controls)
 ./scripts/build-menubar.sh          # menu bar app bundle (debug: CONFIG=debug)
 ./scripts/package-release.sh       # versioned tarball + SHA256SUMS.txt (see VERSION)
 ```
+
+`swift test` needs full Xcode (the Command Line Tools ship no test framework). With Xcode installed but not selected, run it via `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test`.
 
 Layout: `Sources/HeadlessSpotify/*` (CLI), `Sources/HeadlessSpotifyBar/*` +
 `Sources/HeadlessSpotifyBarKit/*` (menu bar extra), `Sources/CHeadlessInjector/*`
