@@ -7,8 +7,8 @@
 class HeadlessSpotify < Formula
   desc "Hide official Spotify from Dock + Cmd-Tab, keep AppleScript control"
   homepage "https://github.com/Kathir-D/headless-spotify"
-  url "https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0/headless-spotify-0.1.0-macos.tar.gz"
-  sha256 "93e55c768ed34ebeb3cb50c4c593e0412ae5cb7ea24e14a7c66ae9ae90043d13"
+  url "https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.1/headless-spotify-0.1.0-beta.1-macos.tar.gz"
+  sha256 "486c9572c63fff7b78c905b7a476359f73257d437836a3e31c0b37e5c82d1cc3"
   license "MIT"
 
   depends_on macos: :sequoia
