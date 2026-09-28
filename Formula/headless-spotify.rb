@@ -51,9 +51,11 @@ class HeadlessSpotify < Formula
     # Missing bundle: usage error (exit 2), no Spotify needed for the test.
     output = shell_output("#{bin}/headless-spotify hide --dry-run --spotify-app /nonexistent/Spotify.app 2>&1", 2)
     assert_match "not found", output
-    # Menu bar extra: shipped in the tarball, installed as a GUI agent app.
-    menubar = Pathname.new("/Applications/headless-spotify.app")
-    assert_predicate menubar, :exist?
-    assert_equal "true", shell_output("/usr/libexec/PlistBuddy -c 'Print :LSUIElement' '#{menubar}/Contents/Info.plist'").strip
+    # Menu bar extra: shipped in the tarball, installed into /Applications.
+    menubar = "/Applications/headless-spotify.app"
+    assert_path_exists "#{menubar}/Contents/Info.plist"
+    plist = shell_output("/usr/libexec/PlistBuddy -c 'Print :LSUIElement' " \
+                         "'#{menubar}/Contents/Info.plist'")
+    assert_equal "true", plist.strip
   end
 end
