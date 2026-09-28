@@ -32,7 +32,7 @@ Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — win
 - **Two hiding methods with automatic fallback** (`hide --mode auto`, the default): `LSUIElement` plist mode first, accessory-policy injector second.
 - **Watcher daemon** (LaunchAgent) re-applies hiding when Spotify self-updates or the Dock icon returns.
 - **Media passthrough** (`control play|pause|toggle|next|previous|volume|…`) using the same AppleScript Sonar uses — never launches Spotify as a side effect.
-- **Menu bar extra**: a top-bar icon whose menu shows the project name and a single Quit action. It is itself `LSUIElement`, so it has no Dock icon and no Cmd-Tab entry.
+- **Menu bar extra**: a top-bar icon whose menu shows the project name, an **Enable/Disable hiding** toggle that drives the same CLI, and Quit. It is itself `LSUIElement`, so it has no Dock icon and no Cmd-Tab entry.
 - **Safe by design**: `install.sh` backs up `Info.plist` (+ the code-seal file); `restore`/`uninstall.sh` bring back the original Apple signature. `sudo` is needed only for install.
 - **Zero dependencies**: Swift standard library + Foundation/AppKit only. No API keys, no certs, nothing to configure.
 
@@ -139,17 +139,31 @@ Match by `bundleID == com.spotify.client`, never by Dock or window presence.
 
 ## Menu bar extra
 
-`install.sh` also drops a small menu bar app in `/Applications/headless-spotify.app`. It adds a waveform icon to the top bar; clicking it opens a menu with exactly two things: the project name (with version, greyed out) and **Quit headless-spotify**.
+`install.sh` also drops a small menu bar app in `/Applications/headless-spotify.app`. It adds a waveform icon to the top bar; clicking it opens a menu with the project name (greyed out), an **Enable/Disable hiding** toggle, and **Quit headless-spotify**.
+
+```
+headless-spotify 0.1.0        (greyed out)
+──────────────────────────
+Disable hiding               ← or "Enable hiding"
+──────────────────────────
+Quit headless-spotify
+```
+
+- The toggle label follows the real state and is recomputed every time you open the menu, so it never lies — even if you change things from the terminal or the watcher does.
+- It drives the `headless-spotify` binary (`hide` / `restore`) rather than reimplementing it, so the menu and the CLI can never disagree. If the binary isn't found (e.g. you copied only the `.app`), the row reads `headless-spotify CLI not found`.
+- On the usual root-owned `/Applications/Spotify.app`, enabling asks for your password once: the plist edit + re-sign runs as root, the relaunch still runs as you, so Spotify keeps your session. Hiding takes a while (deep re-sign + a scripting wait), so the row shows `Working…` and cannot be double-clicked.
+- If a toggle fails, its first line of output appears as a greyed row until you reopen the menu.
 
 ```sh
 open /Applications/headless-spotify.app     # start it
 pkill -f headless-spotify-bar               # or stop it from the CLI
 headless-spotify-bar --print-menu-spec      # show the menu without a GUI
+headless-spotify-bar --print-menu-spec --hiding-enabled   # pin the state (for tests)
 ```
 
 It is packaged as an `LSUIElement` app, so it has no Dock icon and no Cmd-Tab entry — the same trick applied to Spotify — and it needs no Accessibility or Automation permission. Everything else stays on the CLI on purpose: a status bar app that duplicated every subcommand would drift from the real behaviour.
 
-Build it yourself (no toolchain needed for a release tarball, which ships the `.app` ready to copy):
+Build it yourself (a release tarball already ships the `.app` ready to copy):
 
 ```sh
 ./scripts/build-menubar.sh   # → dist/headless-spotify.app
@@ -226,7 +240,7 @@ changes.
 
 ```sh
 swift build          # CLI + injector dylib + menu bar extra (Command Line Tools are enough)
-swift test           # 47 tests in 11 suites, all offline-safe (fixtures, stubbed runners)
+swift test           # 65 tests in 16 suites, all offline-safe (fixtures, stubbed runners)
 ./scripts/smoke-test.sh            # pre-release gate (pass --live to exercise real media controls)
 ./scripts/build-menubar.sh          # menu bar app bundle (debug: CONFIG=debug)
 ./scripts/package-release.sh       # versioned tarball + SHA256SUMS.txt (see VERSION)

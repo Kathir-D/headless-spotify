@@ -46,6 +46,11 @@ echo "== menu bar extra (bundle + menu) =="
 BAR_SPEC="$(./.build/debug/headless-spotify-bar --print-menu-spec)"
 echo "$BAR_SPEC" | grep -q "headless-spotify" && echo "ok: menu names the project"
 echo "$BAR_SPEC" | grep -q "Quit headless-spotify" && echo "ok: menu offers Quit"
+# The toggle label must follow the hiding state, in both directions.
+./.build/debug/headless-spotify-bar --print-menu-spec --hiding-disabled | grep -q "Enable hiding" \
+  && echo "ok: toggle offers Enable when hiding is off"
+./.build/debug/headless-spotify-bar --print-menu-spec --hiding-enabled | grep -q "Disable hiding" \
+  && echo "ok: toggle offers Disable when hiding is on"
 ! ./.build/debug/headless-spotify-bar --bogus >/dev/null 2>&1 && echo "ok: bar rejects unknown flags"
 MENUBAR_OUT="/tmp/smoke-menubar-$$"
 CONFIG=debug OUT_DIR="$MENUBAR_OUT" ./scripts/build-menubar.sh >/dev/null

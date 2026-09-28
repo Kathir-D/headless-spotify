@@ -554,21 +554,20 @@ struct ScriptingTests {
 struct MenuBarModelTests {
     @Test("menu is the project name + Quit, nothing else")
     func menuIsMinimal() {
+        // Name and Quit are the only rows the AppKit glue hard-codes; the
+        // toggle row is asserted in MenuBarToggleTests.
         let items = MenuBarModel.menuItems(version: "1.2.3")
-        #expect(items.count == 3)
-        #expect(items[0].title == "headless-spotify 1.2.3")
-        #expect(items[0].isEnabled == false, "name row is informational, not clickable")
-        #expect(items[1].isSeparator)
-        #expect(items[2].title == "Quit headless-spotify")
-        #expect(items[2].isEnabled)
-        #expect(items[2].isQuit)
+        #expect(items.contains(MenuItemSpec(title: "headless-spotify 1.2.3", isEnabled: false)))
+        #expect(items.contains(MenuItemSpec(title: MenuBarModel.quitTitle, action: .quit)))
+        #expect(!items.contains { $0.action == .none && $0.isEnabled })
     }
 
-    @Test("exactly one enabled action, and it is Quit")
-    func onlyQuitIsActionable() {
+    @Test("only the toggle and Quit are actionable")
+    func onlyToggleAndQuitAreActionable() {
         let actions = MenuBarModel.menuItems(version: "0.1.0").filter { $0.isEnabled && !$0.isSeparator }
-        #expect(actions.count == 1)
-        #expect(actions.first?.isQuit == true)
+        #expect(actions.count == 2)
+        #expect(actions.contains { $0.isQuit })
+        #expect(actions.contains { $0.isToggle })
     }
 
     @Test("identifiers used by the AppKit glue stay stable")
@@ -602,5 +601,182 @@ struct WatcherBackoffTests {
         #expect(Watcher.backoffInterval(base: 15, failures: -3) == 15)
         #expect(Watcher.backoffInterval(base: 0, failures: 5) == 0)
         #expect(Watcher.backoffInterval(base: 10, failures: 2, maxMultiplier: 1) == 10)
+    }
+}
+
+@Suite("Menu bar toggle")
+struct MenuBarToggleTests {
+    @Test("label flips with state")
+    func labelFlips() {
+        #expect(MenuBarModel.toggleTitle(hidingEnabled: true) == "Disable hiding")
+        #expect(MenuBarModel.toggleTitle(hidingEnabled: false) == "Enable hiding")
+    }
+
+    @Test("menu is name, toggle, Quit")
+    func menuShape() {
+        let off = MenuBarModel.menuItems(version: "1.0", hidingEnabled: false)
+        #expect(off.count == 5)
+        #expect(off[0].title == "headless-spotify 1.0" && !off[0].isEnabled)
+        #expect(off[1].isSeparator)
+        #expect(off[2].isToggle && off[2].isEnabled)
+        #expect(off[2].title == "Enable hiding")
+        #expect(off[3].isSeparator)
+        #expect(off[4].isQuit && off[4].isEnabled)
+        let on = MenuBarModel.menuItems(version: "1.0", hidingEnabled: true)
+        #expect(on[2].title == "Disable hiding")
+    }
+
+    @Test("missing CLI disables the toggle instead of failing")
+    func missingCLI() {
+        let items = MenuBarModel.menuItems(version: "1.0", hidingEnabled: false, cliAvailable: false)
+        #expect(items[2].title == MenuBarModel.cliMissingTitle)
+        #expect(!items[2].isEnabled)
+        #expect(!items[2].isToggle)
+        #expect(items[4].isQuit, "Quit stays available")
+    }
+
+    @Test("a running toggle cannot be started twice")
+    func busyDisablesToggle() {
+        let items = MenuBarModel.menuItems(version: "1.0", hidingEnabled: true, busy: true)
+        #expect(items[2].title == MenuBarModel.busyTitle)
+        #expect(!items[2].isEnabled)
+        #expect(!items[2].isToggle)
+    }
+
+    @Test("last result shows as an informational row")
+    func messageRow() {
+        let items = MenuBarModel.menuItems(version: "1.0", message: "hide: not writable")
+        #expect(items.count == 6)
+        #expect(items[3].title == "hide: not writable")
+        #expect(!items[3].isEnabled)
+        #expect(items[5].isQuit)
+    }
+
+    @Test("status message takes one trimmed line and caps length")
+    func statusMessage() {
+        #expect(MenuBarModel.statusMessage(nil) == nil)
+        #expect(MenuBarModel.statusMessage("  \n ") == nil)
+        #expect(MenuBarModel.statusMessage("\n first line \nsecond line") == "first line")
+        let long = String(repeating: "x", count: 200)
+        let capped = MenuBarModel.statusMessage(long)
+        #expect(capped?.count == 60)
+        #expect(capped?.hasSuffix("…") == true)
+    }
+}
+
+@Suite("Hiding state probe")
+struct HidingStateTests {
+    func plist(_ lsui: Any?) -> Data {
+        var dict: [String: Any] = ["CFBundleIdentifier": "com.spotify.client"]
+        if let lsui { dict["LSUIElement"] = lsui }
+        return (try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)) ?? Data()
+    }
+
+    @Test("LSUIElement drives the toggle state")
+    func readsKey() {
+        #expect(HidingState.hidingEnabled(plistData: plist(true)) == true)
+        #expect(HidingState.hidingEnabled(plistData: plist(false)) == false)
+        #expect(HidingState.hidingEnabled(plistData: plist(nil)) == false)
+    }
+
+    @Test("garbage is not hiding")
+    func garbage() {
+        #expect(HidingState.hidingEnabled(plistData: Data("not a plist".utf8)) == false)
+        #expect(HidingState.hidingEnabled(plistData: Data()) == false)
+    }
+}
+
+@Suite("CLI lookup for the menu bar toggle")
+struct CLILocatorTests {
+    @Test("env override wins, then install prefixes, then siblings")
+    func order() {
+        let paths = CLILocator.candidates(
+            env: [CLILocator.envOverride: "/custom/cli"],
+            barExecutablePath: "/Applications/headless-spotify.app/Contents/MacOS/headless-spotify-bar"
+        )
+        #expect(paths.first == "/custom/cli")
+        #expect(paths.contains("/usr/local/bin/headless-spotify"))
+        #expect(paths.contains("/opt/homebrew/bin/headless-spotify"))
+        #expect(paths.contains("/Applications/headless-spotify.app/Contents/MacOS/headless-spotify"))
+    }
+
+    @Test("candidates are de-duplicated")
+    func dedupes() {
+        let paths = CLILocator.candidates(
+            env: [:],
+            barExecutablePath: "/usr/local/bin/headless-spotify-bar"
+        )
+        #expect(paths.filter { $0 == "/usr/local/bin/headless-spotify" }.count == 1)
+        #expect(Set(paths).count == paths.count)
+    }
+
+    @Test("resolve picks the first that exists, else nil")
+    func resolves() {
+        #expect(
+            CLILocator.resolve(
+                env: [CLILocator.envOverride: "/nope/a"],
+                barExecutablePath: nil,
+                exists: { _ in false }
+            ) == nil
+        )
+        #expect(
+            CLILocator.resolve(
+                env: [CLILocator.envOverride: "/nope/a"],
+                barExecutablePath: nil,
+                exists: { $0 == "/usr/local/bin/headless-spotify" }
+            ) == "/usr/local/bin/headless-spotify"
+        )
+    }
+}
+
+@Suite("Toggle command plan")
+struct TogglePlanTests {
+    let cli = "/usr/local/bin/headless-spotify"
+    let app = "/Applications/Spotify.app"
+
+    @Test("writable bundle: one call as the user")
+    func writable() {
+        let enable = TogglePlan.commands(action: .enable, cliPath: cli, spotifyAppPath: app, bundleWritable: true)
+        #expect(enable.count == 1)
+        #expect(enable[0].executable == cli)
+        #expect(enable[0].arguments == ["hide", "--spotify-app", app])
+        let disable = TogglePlan.commands(action: .disable, cliPath: cli, spotifyAppPath: app, bundleWritable: true)
+        #expect(disable[0].arguments.first == "restore")
+    }
+
+    @Test("root-owned bundle: admin prompt for the plist, relaunch as the user")
+    func needsAdmin() {
+        let plan = TogglePlan.commands(action: .enable, cliPath: cli, spotifyAppPath: app, bundleWritable: false)
+        #expect(plan.count == 2)
+        #expect(plan[0].executable == TogglePlan.osascript)
+        #expect(plan[0].arguments.first == "-e")
+        #expect(plan[0].arguments[1].contains("with administrator privileges"))
+        #expect(plan[0].arguments[1].contains("'hide' '--skip-relaunch'"))
+        #expect(!plan[0].arguments[1].contains("--skip-plist"), "the user half must relaunch, not the root half")
+        #expect(plan[1].executable == cli)
+        #expect(plan[1].arguments == ["hide", "--skip-plist", "--spotify-app", app])
+    }
+
+    @Test("paths with spaces stay one argument")
+    func quoting() {
+        let plan = TogglePlan.commands(
+            action: .disable,
+            cliPath: "/Users/me/My Tools/headless-spotify",
+            spotifyAppPath: "/Volumes/Music/Spotify.app",
+            bundleWritable: false
+        )
+        let script = plan[0].arguments[1]
+        #expect(script.contains("'/Users/me/My Tools/headless-spotify'"))
+        #expect(script.contains("'/Volumes/Music/Spotify.app'"))
+    }
+
+    @Test("shell + AppleScript quoting is escaped")
+    func escaping() {
+        #expect(TogglePlan.shellQuote("plain") == "'plain'")
+        #expect(TogglePlan.shellQuote("it's") == #"'it'\''s'"#)
+        let script = TogglePlan.elevatedScript(cliPath: "/a b/cli", arguments: ["hide"])
+        #expect(script == #"do shell script "'/a b/cli' 'hide'" with administrator privileges"#)
+        let quoted = TogglePlan.elevatedScript(cliPath: #"/odd"name"#, arguments: [])
+        #expect(quoted.contains(#"\""#), "double quotes must be escaped for AppleScript")
     }
 }
