@@ -51,4 +51,18 @@ public enum Watcher: Sendable {
             return .none
         }
     }
+
+    /// Exponential backoff between passes, doubling per consecutive failure up
+    /// to `maxMultiplier`. A Spotify build that refuses to be hidden (see README
+    /// "Current status") would otherwise make every pass quit + relaunch +
+    /// deep re-sign — a busy loop. Pure so it is easy to test.
+    public static func backoffInterval(
+        base: TimeInterval,
+        failures: Int,
+        maxMultiplier: Int = 16
+    ) -> TimeInterval {
+        guard base > 0, failures > 0 else { return max(base, 0) }
+        let multiplier = 1 << min(max(failures, 0), 10)
+        return base * TimeInterval(min(multiplier, max(maxMultiplier, 1)))
+    }
 }

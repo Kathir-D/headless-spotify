@@ -578,3 +578,29 @@ struct MenuBarModelTests {
         #expect(!MenuBarModel.iconSymbolName.isEmpty)
     }
 }
+
+@Suite("Watcher backoff")
+struct WatcherBackoffTests {
+    @Test("no failures keeps the configured interval")
+    func noBackoff() {
+        #expect(Watcher.backoffInterval(base: 15, failures: 0) == 15)
+    }
+
+    @Test("doubles per consecutive failure, then caps")
+    func doublesThenCaps() {
+        #expect(Watcher.backoffInterval(base: 15, failures: 1) == 30)
+        #expect(Watcher.backoffInterval(base: 15, failures: 2) == 60)
+        #expect(Watcher.backoffInterval(base: 15, failures: 3) == 120)
+        #expect(Watcher.backoffInterval(base: 15, failures: 4) == 240)
+        // Capped: a Spotify build that can never be hidden must not spin.
+        #expect(Watcher.backoffInterval(base: 15, failures: 10) == 240)
+        #expect(Watcher.backoffInterval(base: 15, failures: 999) == 240)
+    }
+
+    @Test("degenerate inputs are safe")
+    func degenerate() {
+        #expect(Watcher.backoffInterval(base: 15, failures: -3) == 15)
+        #expect(Watcher.backoffInterval(base: 0, failures: 5) == 0)
+        #expect(Watcher.backoffInterval(base: 10, failures: 2, maxMultiplier: 1) == 10)
+    }
+}

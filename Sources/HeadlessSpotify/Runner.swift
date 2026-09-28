@@ -311,6 +311,7 @@ public enum Runner {
         output("watch: guarding \(inv.spotifyAppPath) every \(Int(inv.interval))s (Ctrl-C / SIGTERM to stop)")
         var lastVersion = plist.appVersion()
         var plistFailures = 0
+        var consecutiveFailures = 0
         var pass = 0
         while true {
             pass += 1
@@ -322,25 +323,27 @@ public enum Runner {
                 currentVersion: currentVersion,
                 plistFailures: plistFailures
             )
+            let outcome: Int32
             switch action {
             case .none:
                 plistFailures = 0
+                outcome = 0
             case .relaunchHeadless(let reason):
                 output("watch: \(reason) — re-applying…")
-                let code = await reapply(
+                outcome = await reapply(
                     Invocation(subcommand: .hide, spotifyAppPath: inv.spotifyAppPath, timeout: inv.timeout, mode: .auto),
                     output: output,
                     errorOutput: errorOutput
                 )
-                plistFailures = code == 0 ? 0 : plistFailures + 1
+                plistFailures = outcome == 0 ? 0 : plistFailures + 1
             case .reapplyPlist(let reason):
                 output("watch: \(reason) — re-applying…")
-                let code = await reapply(
+                outcome = await reapply(
                     Invocation(subcommand: .hide, spotifyAppPath: inv.spotifyAppPath, timeout: inv.timeout, mode: .auto),
                     output: output,
                     errorOutput: errorOutput
                 )
-                plistFailures = code == 0 ? 0 : plistFailures
+                plistFailures = outcome == 0 ? 0 : plistFailures
             case .injectorFallback(let reason):
                 output("watch: \(reason) — trying injector…")
                 _ = await reapply(
@@ -348,13 +351,19 @@ public enum Runner {
                     output: output,
                     errorOutput: errorOutput
                 )
+                outcome = 0
                 plistFailures = 0
+            }
+            consecutiveFailures = outcome == 0 ? 0 : consecutiveFailures + 1
+            let sleep = Watcher.backoffInterval(base: inv.interval, failures: consecutiveFailures)
+            if outcome != 0, consecutiveFailures == 1 {
+                errorOutput("watch: hiding failed — backing off to \(Int(sleep))s between attempts (up to \(Int(Watcher.backoffInterval(base: inv.interval, failures: 4)))s). If this persists, see README 'Current status'.")
             }
             lastVersion = currentVersion
             if inv.iterations > 0, pass >= inv.iterations {
                 return 0
             }
-            try? await Task.sleep(nanoseconds: UInt64(inv.interval * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64(sleep * 1_000_000_000))
         }
     }
 

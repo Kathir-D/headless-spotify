@@ -13,6 +13,7 @@ Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — win
 - [Current status](#current-status)
 - [Requirements](#requirements)
 - [Install](#install)
+- [Homebrew](#homebrew)
 - [Usage](#usage)
 - [Menu bar extra](#menu-bar-extra)
 - [How it works](#how-it-works)
@@ -75,6 +76,24 @@ What it does:
 5. Loads the watcher LaunchAgent so hiding survives updates + restarts.
 
 `sudo` is needed only here (bundle edit + system paths) — the CLI itself never needs root.
+
+If hiding does not verify — which is what happens on Spotify ≥1.3.1 today — `install.sh` **does not fail and does not leave Spotify broken**: it prints an explanation, rolls `Info.plist` back, relaunches Spotify normally, and continues installing the CLI, dylib, menu bar app, and watcher. Pass `KEEP_ON_FAILURE=1` if you'd rather keep `LSUIElement` set anyway.
+
+> **Gatekeeper:** the release artifacts are ad-hoc signed, not notarized. A tarball downloaded in a browser is quarantined, so macOS may refuse to run it. Use Homebrew (no quarantine), or clear it once:
+> `xattr -dr com.apple.quarantine <folder>` — or right-click the app → Open → Open.
+
+## Homebrew
+
+The formula lives in this repo at [`Formula/headless-spotify.rb`](Formula/headless-spotify.rb) and installs the CLI, the injector dylib, and the menu bar app into `/Applications`. Its `url` + `sha256` point at the GitHub release tarball and are refreshed automatically by the [release workflow](.github/workflows/release.yml) on every `v*` tag, so they are only correct after a release exists.
+
+To publish, mirror the formula into a tap of your own (`homebrew-<name>/homebrew-<tap>`) and:
+
+```sh
+brew tap Kathir-D/<your-tap>
+brew install headless-spotify
+brew test headless-spotify
+brew audit --strict --online Kathir-D/<your-tap>/headless-spotify
+```
 
 ## Usage
 
@@ -157,7 +176,9 @@ Two hiding methods, tried in order (`hide --mode auto`, the default):
 A **watcher daemon** (`headless-spotify watch`, kept alive by a LaunchAgent)
 re-applies hiding when Spotify self-updates (updates wipe `Info.plist`) or the
 Dock icon returns: stale launch → relaunch headless; wiped plist → redo
-plist + re-sign + relaunch; Dock survives plist mode → injector.
+plist + re-sign + relaunch; Dock survives plist mode → injector. If hiding keeps
+failing (the Spotify ≥1.3.1 case above), the watcher backs off exponentially —
+2×, 4×, 8×, then every 16 intervals — so it never spins on quit + re-sign.
 
 ## Sonar compatibility
 

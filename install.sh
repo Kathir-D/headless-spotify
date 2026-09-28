@@ -13,6 +13,7 @@
 #
 # Usage: sudo ./install.sh [/Applications/Spotify.app]
 #   INSTALL_MENUBAR=0   skip step 5 (CLI only).
+#   KEEP_ON_FAILURE=1   if hiding fails, keep LSUIElement set instead of rolling back.
 set -eu
 
 SPOTIFY_APP="${1:-/Applications/Spotify.app}"
@@ -68,8 +69,27 @@ fi
 # 2. Privileged plist edit (no relaunch as root — that would own your session).
 "$BIN" hide --skip-relaunch --spotify-app "$SPOTIFY_APP"
 
-# 3. Relaunch + verify as the console user.
-sudo -u "$SUDO_USER" "$BIN" hide --skip-plist --spotify-app "$SPOTIFY_APP"
+# 3. Relaunch + verify as the console user. Hiding can legitimately fail —
+#    Spotify >= 1.3.1 quits whenever LSUIElement=true is present — so this must
+#    NOT abort the install and must NOT leave Spotify unable to launch.
+HIDE_OK=1
+sudo -u "$SUDO_USER" "$BIN" hide --skip-plist --spotify-app "$SPOTIFY_APP" || HIDE_OK=0
+if [ "$HIDE_OK" -eq 0 ]; then
+  echo "" >&2
+  echo "install: hiding did not verify. The CLI, dylib, menu bar app and watcher" >&2
+  echo "install: are still installed and working." >&2
+  if [ "${KEEP_ON_FAILURE:-0}" = "1" ]; then
+    echo "install: LSUIElement left in place (KEEP_ON_FAILURE=1) — Spotify may not launch." >&2
+    echo "install: undo with: headless-spotify restore" >&2
+  else
+    echo "install: rolling Info.plist back so Spotify keeps launching…" >&2
+    "$BIN" restore --skip-relaunch --spotify-app "$SPOTIFY_APP" || true
+    sudo -u "$SUDO_USER" /usr/bin/open -a "$SPOTIFY_APP" 2>/dev/null || true
+    echo "install: Spotify restored to normal (Dock icon back). Re-run 'headless-spotify hide'" >&2
+    echo "install: any time — see README 'Current status' if hiding is blocked." >&2
+  fi
+  echo "" >&2
+fi
 
 # 4. Injector dylib (fallback for Dock-return when plist mode is insufficient).
 DYLIB_SRC="${HEADLESS_DYLIB:-}"
