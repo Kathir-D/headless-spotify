@@ -19,7 +19,7 @@ struct CLIParseTests {
         }
     }
 
-    @Test("subcommands parse", arguments: ["status", "hide", "restore", "watch"])
+    @Test("subcommands parse", arguments: ["status", "hide", "restore", "watch", "control"])
     func subcommandsParse(name: String) throws {
         let result = CLI.parse(["headless-spotify", name])
         #expect(try result.get().subcommand == Subcommand(rawValue: name))
@@ -82,6 +82,22 @@ struct CLIParseTests {
         ]).get()
         #expect(watch.interval == 30 && watch.iterations == 2)
         #expect(watch.installAgent && watch.uninstallAgent && watch.printAgentPlist)
+    }
+
+    @Test("control action + value parse")
+    func controlParse() throws {
+        let inv = try CLI.parse(["headless-spotify", "control", "set-volume", "42"]).get()
+        #expect(inv.subcommand == .control)
+        #expect(inv.controlAction == .setVolume)
+        #expect(inv.controlValue == 42)
+        let toggle = try CLI.parse(["headless-spotify", "control", "toggle"]).get()
+        #expect(toggle.controlAction == .toggle && toggle.controlValue == nil)
+        #expect(CLI.parse(["headless-spotify", "control", "dance"]) == .failure(.unknownSubcommand("dance")))
+        if case .failure(let error) = CLI.parse(["headless-spotify", "play"]) {
+            #expect(error == .unknownSubcommand("play"))
+        } else {
+            Issue.record("expected unknownSubcommand for bare play")
+        }
     }
 
     @Test("help text states the Sonar contract")
@@ -344,6 +360,95 @@ struct AgentPlistTests {
         #expect(AgentPlist.agentPlistPath(homeDirectory: "/Users/ada") == "/Users/ada/Library/LaunchAgents/com.headless-spotify.watcher.plist")
     }
 }
+@Suite("Control (stubbed runner)")
+struct ControlTests {
+    final class Calls: @unchecked Sendable { var scripts: [String] = [] }
+
+    /// Stub: pgrep says running; osascript records the script, answers volume 70.
+    func makeRun(calls: Calls) -> SpotifyScripting.Runner {
+        { exe, args, _ in
+            if exe.hasSuffix("pgrep") { return ProcessResult(exitCode: 0, stdout: "123\n", stderr: "") }
+            let script = args.last ?? ""
+            calls.scripts.append(script)
+            if script.contains("get sound volume") {
+                return ProcessResult(exitCode: 0, stdout: "70\n", stderr: "")
+            }
+            return ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        }
+    }
+
+    @Test("verbs map to exact AppleScript", arguments: [
+        (ControlAction.play, "tell application \"Spotify\" to play"),
+        (ControlAction.pause, "tell application \"Spotify\" to pause"),
+        (ControlAction.toggle, "tell application \"Spotify\" to playpause"),
+        (ControlAction.next, "tell application \"Spotify\" to next track"),
+        (ControlAction.previous, "tell application \"Spotify\" to previous track"),
+    ] as [(ControlAction, String)])
+    func verbs(pair: (ControlAction, String)) {
+        #expect(Control.script(for: pair.0) == pair.1)
+    }
+
+    @Test("volume math clamps 0–100")
+    func volumeClamps() {
+        #expect(Control.script(for: .setVolume, value: 150) == "tell application \"Spotify\" to set sound volume to 100")
+        #expect(Control.script(for: .setVolume, value: -20) == "tell application \"Spotify\" to set sound volume to 0")
+        #expect(Control.script(for: .volumeUp, currentVolume: 95) == "tell application \"Spotify\" to set sound volume to 100")
+        #expect(Control.script(for: .volumeDown, currentVolume: 5) == "tell application \"Spotify\" to set sound volume to 0")
+        #expect(Control.script(for: .setVolume) == nil)
+    }
+
+    @Test("perform sends the script, exit 0")
+    func performOk() {
+        let calls = Calls()
+        let (code, line) = Control.perform(.next, run: makeRun(calls: calls))
+        #expect(code == 0)
+        #expect(calls.scripts == ["tell application \"Spotify\" to next track"])
+        #expect(line == "next: ok")
+    }
+
+    @Test("volume-up reads then writes")
+    func volumeUpTwoStep() {
+        let calls = Calls()
+        let (code, line) = Control.perform(.volumeUp, run: makeRun(calls: calls))
+        #expect(code == 0)
+        // get → set → confirm re-read
+        #expect(calls.scripts.count == 3)
+        #expect(calls.scripts[1] == "tell application \"Spotify\" to set sound volume to 80")
+        #expect(line == "volume: 70")
+    }
+
+    @Test("not running refuses without launching")
+    func notRunningGate() {
+        let calls = Calls()
+        let run: SpotifyScripting.Runner = { exe, _, _ in
+            if exe.hasSuffix("pgrep") { return ProcessResult(exitCode: 1, stdout: "", stderr: "") }
+            calls.scripts.append(exe)
+            return ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        }
+        let (code, _) = Control.perform(.play, run: run)
+        #expect(code == 1)
+        #expect(!calls.scripts.contains(where: { $0.contains("osascript") }))
+    }
+
+    @Test("set-volume without value is usage error")
+    func setVolumeNeedsValue() {
+        let calls = Calls()
+        let (code, _) = Control.perform(.setVolume, run: makeRun(calls: calls))
+        #expect(code == 2)
+        #expect(calls.scripts.isEmpty)
+    }
+
+    @Test("Runner.control rejects missing action")
+    func runnerMissingAction() {
+        let errors = RunnerDryRunTests.Lines()
+        let code = Runner.control(
+            Invocation(subcommand: .control),
+            output: { _ in }, errorOutput: { errors.values.append($0) }
+        )
+        #expect(code == 2)
+    }
+}
+
 @Suite("ProcessRunner")
 struct ProcessRunnerTests {
     @Test("hung child is killed after timeout")

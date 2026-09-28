@@ -12,6 +12,7 @@ public enum Subcommand: String, Sendable, CaseIterable {
     case hide
     case restore
     case watch
+    case control
 }
 
 /// Parsed CLI invocation.
@@ -46,6 +47,9 @@ public struct Invocation: Sendable, Equatable {
     public var uninstallAgent: Bool
     /// `watch --print-agent-plist`: print the agent plist to stdout.
     public var printAgentPlist: Bool
+    /// `control`: media action + optional numeric value (set-volume).
+    public var controlAction: ControlAction?
+    public var controlValue: Int?
 
     public init(
         subcommand: Subcommand? = nil,
@@ -64,7 +68,9 @@ public struct Invocation: Sendable, Equatable {
         iterations: Int = 0,
         installAgent: Bool = false,
         uninstallAgent: Bool = false,
-        printAgentPlist: Bool = false
+        printAgentPlist: Bool = false,
+        controlAction: ControlAction? = nil,
+        controlValue: Int? = nil
     ) {
         self.subcommand = subcommand
         self.showHelp = showHelp
@@ -83,6 +89,8 @@ public struct Invocation: Sendable, Equatable {
         self.installAgent = installAgent
         self.uninstallAgent = uninstallAgent
         self.printAgentPlist = printAgentPlist
+        self.controlAction = controlAction
+        self.controlValue = controlValue
     }
 }
 
@@ -103,6 +111,7 @@ public enum CLI: Sendable {
 
         USAGE:
           headless-spotify [--spotify-app <path>] [--timeout <s>] <status|hide|restore|watch>
+          headless-spotify control <play|pause|toggle|next|previous|volume|set-volume N|volume-up|volume-down>
           headless-spotify --help | --version
 
         SUBCOMMANDS:
@@ -116,6 +125,9 @@ public enum CLI: Sendable {
                     returns), relaunch normally
           watch     Persistence daemon: re-apply hiding when Spotify updates or
                     the Dock icon returns; --install-agent wires the LaunchAgent
+          control   Media passthrough (same AppleScript Sonar uses): play,
+                    pause, toggle, next, previous, volume, set-volume,
+                    volume-up, volume-down. Never launches Spotify.
 
         OPTIONS:
           --spotify-app <path>  Path to Spotify.app (default: \(defaultSpotifyAppPath))
@@ -238,6 +250,16 @@ public enum CLI: Sendable {
                     return .failure(.unknownSubcommand(arg))
                 } else if let sub = Subcommand(rawValue: arg) {
                     invocation.subcommand = sub
+                } else if invocation.subcommand == .control,
+                          invocation.controlAction == nil,
+                          let action = ControlAction(rawValue: arg)
+                {
+                    invocation.controlAction = action
+                } else if invocation.subcommand == .control,
+                          invocation.controlValue == nil,
+                          let n = Int(arg)
+                {
+                    invocation.controlValue = n
                 } else {
                     return .failure(.unknownSubcommand(arg))
                 }

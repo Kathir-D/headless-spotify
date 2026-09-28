@@ -30,6 +30,8 @@ public enum Runner {
             return await restore(invocation, output: output, errorOutput: errorOutput)
         case .watch:
             return await watch(invocation, output: output, errorOutput: errorOutput)
+        case .control:
+            return control(invocation, output: output, errorOutput: errorOutput)
         case .none:
             output(CLI.helpText)
             return 0
@@ -255,6 +257,28 @@ public enum Runner {
             errorOutput("hide: Dock still visible — run `headless-spotify restore --spotify-app \(inv.spotifyAppPath)` to return Spotify to normal.")
         }
         return presence == .hidden ? 0 : 1
+    }
+
+    // MARK: - control (media passthrough)
+
+    /// Synchronous: no AppKit, only bounded osascript calls.
+    static func control(
+        _ inv: Invocation,
+        output: @Sendable (String) -> Void,
+        errorOutput: @Sendable (String) -> Void,
+        run: SpotifyScripting.Runner = ProcessRunner.run
+    ) -> Int32 {
+        guard let action = inv.controlAction else {
+            errorOutput("control: missing action — try 'headless-spotify control play|pause|toggle|next|previous|volume|set-volume N|volume-up|volume-down'.")
+            return 2
+        }
+        if inv.dryRun {
+            output("control plan: \(action.rawValue)\(inv.controlValue.map { " \($0)" } ?? "") via AppleScript (no Spotify launch).")
+            return 0
+        }
+        let (code, line) = Control.perform(action, value: inv.controlValue, run: run)
+        (code == 0 ? output : errorOutput)(line)
+        return code
     }
 
     // MARK: - watch (persistence daemon)
