@@ -13,19 +13,20 @@ import Foundation
 public enum SpotifyScripting: Sendable {
     public static let bundleID = "com.spotify.client"
 
-    public typealias Runner = @Sendable (String, [String]) -> ProcessResult
+    public typealias Runner = @Sendable (String, [String], TimeInterval) -> ProcessResult
 
     /// Permission-free running check. `-x` matches exactly "Spotify", so the
     /// "Spotify Helper" processes never match.
     public static func isSpotifyRunning(run: Runner = ProcessRunner.run) -> Bool {
-        run("/usr/bin/pgrep", ["-x", "Spotify"]).exitCode == 0
+        run("/usr/bin/pgrep", ["-x", "Spotify"], 10).exitCode == 0
     }
 
     /// One-shot `player state` (playing|paused|stopped). nil when Spotify is
-    /// not running or not scriptable yet.
+    /// not running or not scriptable yet. Never launches Spotify: the pgrep
+    /// gate returns nil first when it is not running.
     public static func playerState(run: Runner = ProcessRunner.run) -> String? {
         guard isSpotifyRunning(run: run) else { return nil }
-        let result = run("/usr/bin/osascript", ["-e", "tell application \"Spotify\" to get player state"])
+        let result = run("/usr/bin/osascript", ["-e", "tell application \"Spotify\" to get player state"], 15)
         guard result.exitCode == 0 else { return nil }
         let state = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return state.isEmpty ? nil : state
@@ -49,14 +50,16 @@ public enum SpotifyScripting: Sendable {
 
     /// Ad-hoc re-sign after a plist edit (Apple Silicon refuses to relaunch a
     /// bundle whose seal no longer matches). Breaks Spotify's original
-    /// signature — `restore` puts the original files back.
+    /// signature — `restore` puts the original files back. Deep re-signs of
+    /// Chromium-based apps are slow: allow up to 5 minutes.
     public static func resignAdHoc(appPath: String, run: Runner = ProcessRunner.run) -> ProcessResult {
-        run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", appPath])
+        run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", appPath], 300)
     }
 
     /// Verify the bundle seal (used after restore to prove the original
-    /// Apple signature is back).
+    /// files are back). Plain `--verify` (no --strict): strict deep checks
+    /// flag stock Electron/Chromium resource rules and false-alarm.
     public static func verifySignature(appPath: String, run: Runner = ProcessRunner.run) -> ProcessResult {
-        run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appPath])
+        run("/usr/bin/codesign", ["--verify", appPath], 120)
     }
 }

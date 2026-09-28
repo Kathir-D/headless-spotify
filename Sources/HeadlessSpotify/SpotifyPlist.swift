@@ -91,19 +91,21 @@ public struct SpotifyPlist: Sendable {
         return dict["LSUIElement"] as? Bool
     }
 
-    /// Back up Info.plist (+ CodeResources when present). Keeps an existing
-    /// backup untouched so the ORIGINAL is always what restore returns.
+    /// Back up Info.plist (+ CodeResources when present). Seal FIRST, then
+    /// plist: if we die in between, restore refuses (plist backup is the
+    /// gate) instead of silently losing the original seal. An existing backup
+    /// is never clobbered, so the ORIGINAL is always what restore returns.
     public func backup() throws {
         guard appExists else { throw PlistError.appNotFound(appPath) }
         guard plistExists else { throw PlistError.infoPlistMissing(infoPlistURL.path) }
         let fm = FileManager.default
-        if !hasBackup {
-            try fm.copyItem(at: infoPlistURL, to: backupURL)
-        }
         if fm.fileExists(atPath: codeResourcesURL.path),
            !fm.fileExists(atPath: codeResourcesBackupURL.path)
         {
             try fm.copyItem(at: codeResourcesURL, to: codeResourcesBackupURL)
+        }
+        if !hasBackup {
+            try fm.copyItem(at: infoPlistURL, to: backupURL)
         }
     }
 

@@ -274,11 +274,11 @@ struct WatcherTests {
 struct InjectorTests {
     @Test("hardened runtime detected from codesign output")
     func hardenedDetected() {
-        let hardened: SpotifyScripting.Runner = { _, _ in
+        let hardened: SpotifyScripting.Runner = { _, _, _ in
             ProcessResult(exitCode: 0, stdout: "", stderr: "Identifier=com.spotify.client\nflags=0x10000(runtime) hashes=2551+7 location=embedded\n")
         }
         #expect(Injector.isHardenedRuntime(appPath: "/Applications/Spotify.app", run: hardened))
-        let plain: SpotifyScripting.Runner = { _, _ in
+        let plain: SpotifyScripting.Runner = { _, _, _ in
             ProcessResult(exitCode: 0, stdout: "", stderr: "Identifier=com.example.Fixture\nflags=0x0(none) hashes=1+1 location=embedded\n")
         }
         #expect(!Injector.isHardenedRuntime(appPath: "/tmp/Fixture.app", run: plain))
@@ -317,6 +317,24 @@ struct AgentPlistTests {
         #expect(AgentPlist.agentPlistPath(homeDirectory: "/Users/ada") == "/Users/ada/Library/LaunchAgents/com.headless-spotify.watcher.plist")
     }
 }
+@Suite("ProcessRunner")
+struct ProcessRunnerTests {
+    @Test("hung child is killed after timeout")
+    func timeoutKills() {
+        let result = ProcessRunner.run("/bin/sleep", ["30"], timeout: 1)
+        #expect(result.timedOut)
+        #expect(result.exitCode == 124)
+    }
+
+    @Test("fast child unaffected")
+    func fastChild() {
+        let result = ProcessRunner.run("/bin/echo", ["hi"], timeout: 10)
+        #expect(!result.timedOut)
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "hi")
+    }
+}
+
 @Suite("SpotifyScripting with stubbed runner")
 struct ScriptingTests {
     final class Box: @unchecked Sendable {        var calls: [String] = []
@@ -326,7 +344,7 @@ struct ScriptingTests {
     @Test("not running short-circuits osascript")
     func notRunningShortCircuits() {
         let box = Box()
-        let run: SpotifyScripting.Runner = { exe, args in
+        let run: SpotifyScripting.Runner = { exe, args, _ in
             box.calls.append(exe + " " + args.joined(separator: " "))
             if exe.hasSuffix("pgrep") { return ProcessResult(exitCode: 1, stdout: "", stderr: "") }
             return ProcessResult(exitCode: 0, stdout: "playing\n", stderr: "")
@@ -339,7 +357,7 @@ struct ScriptingTests {
     @Test("waitForScripting polls until answered")
     func pollsUntilAnswered() {
         let box = Box()
-        let run: SpotifyScripting.Runner = { exe, _ in
+        let run: SpotifyScripting.Runner = { exe, _, _ in
             if exe.hasSuffix("pgrep") { return ProcessResult(exitCode: 0, stdout: "123\n", stderr: "") }
             box.n += 1
             if box.n < 3 { return ProcessResult(exitCode: 1, stdout: "", stderr: "not running") }

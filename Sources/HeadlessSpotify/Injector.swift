@@ -34,7 +34,7 @@ public enum Injector: Sendable {
 
     /// Parse `codesign -dv` output: flags=0x10000(runtime) means hardened.
     public static func isHardenedRuntime(appPath: String, run: SpotifyScripting.Runner = ProcessRunner.run) -> Bool {
-        let result = run("/usr/bin/codesign", ["-dv", appPath])
+        let result = run("/usr/bin/codesign", ["-dv", appPath], 30)
         let combined = result.stdout + "\n" + result.stderr
         for line in combined.split(separator: "\n") {
             let text = line.trimmingCharacters(in: .whitespaces)
