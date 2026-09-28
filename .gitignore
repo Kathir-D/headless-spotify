@@ -1,0 +1,17 @@
+# Xcode + SPM + macOS
+.build/
+DerivedData/
+*.xcuserdata/
+*.moved-aside
+*.hmap
+# SPM
+.swiftpm/
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+# Logs
+*.log
+# Env / secrets — never commit API keys, certs
+.env
+*.p12
