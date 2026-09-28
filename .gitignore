@@ -6,6 +6,8 @@ DerivedData/
 *.hmap
 # SPM
 .swiftpm/
+# Release artifacts (rebuilt by scripts/package-release.sh)
+dist/
 # macOS
 .DS_Store
 .AppleDouble

@@ -30,12 +30,28 @@ if [ ! -d "$SPOTIFY_APP" ]; then
   exit 1
 fi
 
-# 1. CLI binary: reuse HEADLESS_BIN when provided (release tarballs), else build.
+# 1. CLI binary: explicit HEADLESS_BIN wins, then a tarball-layout bin/ next
+#    to this script, then a source-tree release build, then build from source.
+#    (Multi-arch `swift build` products live in .build/apple/Products/Release.)
+find_built() {
+  for candidate in \
+    "$SCRIPT_DIR/.build/apple/Products/Release/$1" \
+    "$SCRIPT_DIR/.build/release/$1"; do
+    if [ -f "$candidate" ]; then echo "$candidate"; return 0; fi
+  done
+  found="$(find "$SCRIPT_DIR/.build" -path "*release/$1" -type f 2>/dev/null | head -1 || true)"
+  [ -n "$found" ] && echo "$found" && return 0
+  return 1
+}
 if [ -n "${HEADLESS_BIN:-}" ]; then
   install -m 0755 "$HEADLESS_BIN" "$BIN"
   echo "installed $HEADLESS_BIN -> $BIN"
-elif [ -x "$BIN" ] && [ "$SCRIPT_DIR/.build/release/headless-spotify" -ot "$BIN" ] 2>/dev/null; then
-  echo "reusing $BIN"
+elif [ -f "$SCRIPT_DIR/bin/headless-spotify" ]; then
+  install -m 0755 "$SCRIPT_DIR/bin/headless-spotify" "$BIN"
+  echo "installed $SCRIPT_DIR/bin/headless-spotify -> $BIN"
+elif BUILT_BIN="$(find_built headless-spotify)"; then
+  install -m 0755 "$BUILT_BIN" "$BIN"
+  echo "installed $BUILT_BIN -> $BIN"
 else
   if ! command -v swift >/dev/null 2>&1; then
     echo "error: Xcode CLT swift not found and HEADLESS_BIN unset." >&2
@@ -54,9 +70,11 @@ fi
 sudo -u "$SUDO_USER" "$BIN" hide --skip-plist --spotify-app "$SPOTIFY_APP"
 
 # 4. Injector dylib (fallback for Dock-return when plist mode is insufficient).
-DYLIB_SRC="$SCRIPT_DIR/.build/release/libHeadlessSpotifyInjector.dylib"
-if [ -n "${HEADLESS_DYLIB:-}" ]; then
-  DYLIB_SRC="$HEADLESS_DYLIB"
+DYLIB_SRC="${HEADLESS_DYLIB:-}"
+if [ -z "$DYLIB_SRC" ] && [ -f "$SCRIPT_DIR/lib/libHeadlessSpotifyInjector.dylib" ]; then
+  DYLIB_SRC="$SCRIPT_DIR/lib/libHeadlessSpotifyInjector.dylib"
+elif [ -z "$DYLIB_SRC" ]; then
+  DYLIB_SRC="$(find_built libHeadlessSpotifyInjector.dylib || true)"
 fi
 if [ -f "$DYLIB_SRC" ]; then
   mkdir -p /usr/local/lib/headless-spotify
