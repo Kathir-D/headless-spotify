@@ -14,4 +14,10 @@ jobs:
       - name: Test
         run: swift test
       - name: Audit formula (style only, no network)
-        run: brew audit --strict Formula/headless-spotify.rb
+        run: |
+          # `brew audit [path]` is disabled: stage the formula in a local tap.
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          TAPDIR="$(brew --repository)/Library/Taps/$OWNER/homebrew-headless-spotify"
+          mkdir -p "$TAPDIR/Formula"
+          cp Formula/headless-spotify.rb "$TAPDIR/Formula/"
+          brew audit --strict "$OWNER/headless-spotify/headless-spotify"
