@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Kathir-D/headless-spotify/actions/workflows/ci.yml/badge.svg)](https://github.com/Kathir-D/headless-spotify/actions)
 [![macOS](https://img.shields.io/badge/macOS-15%2B-lightgrey)](#requirements)
-[![version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/Kathir-D/headless-spotify/releases)
+[![version](https://img.shields.io/github/v/release/Kathir-D/headless-spotify?label=version)](https://github.com/Kathir-D/headless-spotify/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — windows still work, AppleScript still works, so [Sonar](https://github.com/Kathir-D/sonar) controls it identically to normal Spotify. No Premium, no API key, no Soloist/librespot.
