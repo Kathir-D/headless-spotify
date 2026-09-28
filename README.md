@@ -14,6 +14,7 @@ Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — win
 - [Requirements](#requirements)
 - [Install](#install)
 - [Usage](#usage)
+- [Menu bar extra](#menu-bar-extra)
 - [How it works](#how-it-works)
 - [Sonar compatibility](#sonar-compatibility)
 - [Troubleshooting](#troubleshooting)
@@ -30,6 +31,7 @@ Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — win
 - **Two hiding methods with automatic fallback** (`hide --mode auto`, the default): `LSUIElement` plist mode first, accessory-policy injector second.
 - **Watcher daemon** (LaunchAgent) re-applies hiding when Spotify self-updates or the Dock icon returns.
 - **Media passthrough** (`control play|pause|toggle|next|previous|volume|…`) using the same AppleScript Sonar uses — never launches Spotify as a side effect.
+- **Menu bar extra**: a top-bar icon whose menu shows the project name and a single Quit action. It is itself `LSUIElement`, so it has no Dock icon and no Cmd-Tab entry.
 - **Safe by design**: `install.sh` backs up `Info.plist` (+ the code-seal file); `restore`/`uninstall.sh` bring back the original Apple signature. `sudo` is needed only for install.
 - **Zero dependencies**: Swift standard library + Foundation/AppKit only. No API keys, no certs, nothing to configure.
 
@@ -69,7 +71,8 @@ What it does:
 1. Builds the release CLI + dylib (or reuses a prebuilt `bin/`), installs them to `/usr/local/bin` and `/usr/local/lib/headless-spotify/`.
 2. Backs up `Info.plist` (+ the code-seal file), sets `LSUIElement=true`, ad-hoc re-signs (credit: [4ian/hide-spotify-from-dock](https://github.com/4ian/hide-spotify-from-dock)).
 3. Relaunches Spotify headless **as you** (`NSWorkspace.openApplication(activates:false)`) and polls `player state` for up to 10 s.
-4. Loads the watcher LaunchAgent so hiding survives updates + restarts.
+4. Installs and launches the menu bar extra at `/Applications/headless-spotify.app` (skip with `INSTALL_MENUBAR=0 sudo ./install.sh`).
+5. Loads the watcher LaunchAgent so hiding survives updates + restarts.
 
 `sudo` is needed only here (bundle edit + system paths) — the CLI itself never needs root.
 
@@ -114,6 +117,24 @@ tell application "Spotify" to get player state
 ```
 
 Match by `bundleID == com.spotify.client`, never by Dock or window presence.
+
+## Menu bar extra
+
+`install.sh` also drops a small menu bar app in `/Applications/headless-spotify.app`. It adds a waveform icon to the top bar; clicking it opens a menu with exactly two things: the project name (with version, greyed out) and **Quit headless-spotify**.
+
+```sh
+open /Applications/headless-spotify.app     # start it
+pkill -f headless-spotify-bar               # or stop it from the CLI
+headless-spotify-bar --print-menu-spec      # show the menu without a GUI
+```
+
+It is packaged as an `LSUIElement` app, so it has no Dock icon and no Cmd-Tab entry — the same trick applied to Spotify — and it needs no Accessibility or Automation permission. Everything else stays on the CLI on purpose: a status bar app that duplicated every subcommand would drift from the real behaviour.
+
+Build it yourself (no toolchain needed for a release tarball, which ships the `.app` ready to copy):
+
+```sh
+./scripts/build-menubar.sh   # → dist/headless-spotify.app
+```
 
 ## How it works
 
@@ -176,19 +197,22 @@ users have already granted.
 ```
 
 Restores the original `Info.plist` + seal (Apple's signature verifies again),
-relaunches Spotify normally, unloads/removes the agent, removes the CLI +
-dylib. Your Dock icon comes back; nothing else changes.
+relaunches Spotify normally, unloads/removes the agent, quits and removes the
+menu bar app, removes the CLI + dylib. Your Dock icon comes back; nothing else
+changes.
 
 ## Developing
 
 ```sh
-swift build          # CLI + injector dylib (Xcode Command Line Tools are enough)
-swift test           # 52 tests, all offline-safe (fixtures, stubbed runners; needs full Xcode)
+swift build          # CLI + injector dylib + menu bar extra (Command Line Tools are enough)
+swift test           # 55 tests, all offline-safe (fixtures, stubbed runners; needs full Xcode)
 ./scripts/smoke-test.sh            # pre-release gate (pass --live to exercise real media controls)
+./scripts/build-menubar.sh          # menu bar app bundle (debug: CONFIG=debug)
 ./scripts/package-release.sh       # versioned tarball + SHA256SUMS.txt (see VERSION)
 ```
 
-Layout: `Sources/HeadlessSpotify/*` (CLI), `Sources/CHeadlessInjector/*`
+Layout: `Sources/HeadlessSpotify/*` (CLI), `Sources/HeadlessSpotifyBar/*` +
+`Sources/HeadlessSpotifyBarKit/*` (menu bar extra), `Sources/CHeadlessInjector/*`
 (dylib), `Tests/HeadlessSpotifyTests/*`, `install.sh` / `uninstall.sh`,
 `launchagent/*.plist`, `Formula/headless-spotify.rb`,
 `scripts/package-release.sh` + `scripts/smoke-test.sh`.

@@ -66,6 +66,16 @@ cp install.sh uninstall.sh LICENSE README.md THIRD-PARTY-NOTICES.md VERSION "$ST
 cp launchagent/com.headless-spotify.watcher.plist "$STAGE/launchagent/"
 chmod +x "$STAGE/install.sh" "$STAGE/uninstall.sh"
 
+# Menu bar extra as a ready-to-install LSUIElement .app at the tarball root,
+# so install.sh can drop it in /Applications without a toolchain. SKIP_BUILD
+# keeps whatever `swift build` just produced (universal when multi-arch).
+SKIP_BUILD=1 ./scripts/build-menubar.sh >/dev/null
+if [ -d "dist/headless-spotify.app" ]; then
+  cp -R "dist/headless-spotify.app" "$STAGE/"
+else
+  echo "warning: menu bar app not built — tarball ships the CLI only" >&2
+fi
+
 TARBALL="dist/headless-spotify-$VERSION-macos.tar.gz"
 tar -czf "$TARBALL" -C dist/stage "headless-spotify-$VERSION"
 (cd dist && shasum -a 256 "$(basename "$TARBALL")" > SHA256SUMS.txt)

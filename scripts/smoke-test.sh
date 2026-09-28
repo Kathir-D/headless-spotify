@@ -26,6 +26,7 @@ echo "== static checks =="
 sh -n install.sh && echo "ok: install.sh syntax"
 sh -n uninstall.sh && echo "ok: uninstall.sh syntax"
 sh -n scripts/package-release.sh && echo "ok: package-release.sh syntax"
+sh -n scripts/build-menubar.sh && echo "ok: build-menubar.sh syntax"
 sh -n scripts/smoke-test.sh && echo "ok: smoke-test.sh syntax"
 command -v shellcheck >/dev/null && shellcheck -S error install.sh uninstall.sh scripts/*.sh && echo "ok: shellcheck" || echo "skip: shellcheck not installed"
 (ruby -ryaml -e 'Dir.glob(".github/workflows/*.yml") { |f| YAML.load_file(f) }' && echo "ok: workflows YAML") 2>/dev/null || echo "skip: ruby/yaml unavailable"
@@ -40,6 +41,20 @@ check "version" ./.build/debug/headless-spotify --version
 check "help" ./.build/debug/headless-spotify --help
 check "control dry-run" ./.build/debug/headless-spotify control play --dry-run
 ! ./.build/debug/headless-spotify hide --spotify-app /nonexistent/Spotify.app >/dev/null 2>&1 && echo "ok: missing app exits nonzero"
+
+echo "== menu bar extra (bundle + menu) =="
+BAR_SPEC="$(./.build/debug/headless-spotify-bar --print-menu-spec)"
+echo "$BAR_SPEC" | grep -q "headless-spotify" && echo "ok: menu names the project"
+echo "$BAR_SPEC" | grep -q "Quit headless-spotify" && echo "ok: menu offers Quit"
+! ./.build/debug/headless-spotify-bar --bogus >/dev/null 2>&1 && echo "ok: bar rejects unknown flags"
+MENUBAR_OUT="/tmp/smoke-menubar-$$"
+CONFIG=debug OUT_DIR="$MENUBAR_OUT" ./scripts/build-menubar.sh >/dev/null
+MENUBAR_APP="$MENUBAR_OUT/headless-spotify.app"
+/usr/bin/plutil -lint "$MENUBAR_APP/Contents/Info.plist" >/dev/null && echo "ok: menubar Info.plist"
+[ "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$MENUBAR_APP/Contents/Info.plist")" = "true" ] \
+  && echo "ok: menubar is LSUIElement (no Dock icon)"
+[ -x "$MENUBAR_APP/Contents/MacOS/headless-spotify-bar" ] && echo "ok: menubar executable present"
+rm -rf "$MENUBAR_OUT"
 
 echo "== fixture hide/restore cycle =="
 FIXTURE="/tmp/smoke-fixture-$$"

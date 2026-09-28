@@ -37,7 +37,18 @@ else
   echo "warning: $BIN not found — skipping relaunch (restore the backup manually if needed)." >&2
 fi
 
-# 2. Unload + remove watcher agent (best effort; absent until task 3).
+# 2. Remove the menu bar app (quit it first so it is not left running).
+MENUBAR_APP="/Applications/headless-spotify.app"
+if [ -d "$MENUBAR_APP" ]; then
+  pkill -f headless-spotify-bar 2>/dev/null || true
+  if [ -w "$MENUBAR_APP" ]; then
+    rm -rf "$MENUBAR_APP" && echo "removed $MENUBAR_APP"
+  else
+    echo "keeping $MENUBAR_APP (not writable — remove with sudo)"
+  fi
+fi
+
+# 3. Unload + remove watcher agent (best effort; absent until task 3).
 for AGENTS_DIR in "$HOME/Library/LaunchAgents" /Library/LaunchAgents; do
   PLIST="$AGENTS_DIR/$LABEL.plist"
   if [ -f "$PLIST" ]; then
@@ -47,7 +58,7 @@ for AGENTS_DIR in "$HOME/Library/LaunchAgents" /Library/LaunchAgents; do
   fi
 done
 
-# 3. Remove CLI binary + injector dylib.
+# 4. Remove CLI binary + injector dylib.
 if [ -f "$BIN" ] && [ -w "$(dirname "$BIN")" ]; then
   rm -f "$BIN" && echo "removed $BIN"
 elif [ -f "$BIN" ]; then

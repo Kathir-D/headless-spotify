@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import HeadlessSpotify
+import HeadlessSpotifyBarKit
 
 @Suite("CLI parsing")
 struct CLIParseTests {
@@ -546,5 +547,34 @@ struct ScriptingTests {
         let state = SpotifyScripting.waitForScripting(timeout: 10, pollInterval: 0, run: run, sleep: { _ in })
         #expect(state == "paused")
         #expect(box.n == 3)
+    }
+}
+
+@Suite("Menu bar extra")
+struct MenuBarModelTests {
+    @Test("menu is the project name + Quit, nothing else")
+    func menuIsMinimal() {
+        let items = MenuBarModel.menuItems(version: "1.2.3")
+        #expect(items.count == 3)
+        #expect(items[0].title == "headless-spotify 1.2.3")
+        #expect(items[0].isEnabled == false, "name row is informational, not clickable")
+        #expect(items[1].isSeparator)
+        #expect(items[2].title == "Quit headless-spotify")
+        #expect(items[2].isEnabled)
+        #expect(items[2].isQuit)
+    }
+
+    @Test("exactly one enabled action, and it is Quit")
+    func onlyQuitIsActionable() {
+        let actions = MenuBarModel.menuItems(version: "0.1.0").filter { $0.isEnabled && !$0.isSeparator }
+        #expect(actions.count == 1)
+        #expect(actions.first?.isQuit == true)
+    }
+
+    @Test("identifiers used by the AppKit glue stay stable")
+    func identifiers() {
+        #expect(MenuBarModel.projectName == "headless-spotify")
+        #expect(MenuBarModel.quitTitle == "Quit headless-spotify")
+        #expect(!MenuBarModel.iconSymbolName.isEmpty)
     }
 }

@@ -8,9 +8,11 @@
 #   3. `hide --skip-plist` as the console user: relaunch headless
 #      (activates:false) and verify `player state` (<=10 s default).
 #   4. Install the injector dylib to /usr/local/lib/headless-spotify/.
-#   5. Generate + bootstrap the watcher LaunchAgent as the console user.
+#   5. Install + launch the menu bar extra (/Applications/headless-spotify.app).
+#   6. Generate + bootstrap the watcher LaunchAgent as the console user.
 #
 # Usage: sudo ./install.sh [/Applications/Spotify.app]
+#   INSTALL_MENUBAR=0   skip step 5 (CLI only).
 set -eu
 
 SPOTIFY_APP="${1:-/Applications/Spotify.app}"
@@ -84,7 +86,38 @@ else
   echo "warning: injector dylib not built ($DYLIB_SRC missing) — plist mode only." >&2
 fi
 
-# 5. Watcher LaunchAgent: generate from the CLI (single source of truth) and
+# 5. Menu bar extra: an LSUIElement .app whose menu shows the project name and
+#    a single Quit action. No Dock icon, no Cmd-Tab, no extra permissions.
+if [ "${INSTALL_MENUBAR:-1}" = "0" ]; then
+  echo "skipping menu bar app (INSTALL_MENUBAR=0)"
+else
+  MENUBAR_APP=""
+  if [ -d "$SCRIPT_DIR/headless-spotify.app" ]; then
+    MENUBAR_APP="$SCRIPT_DIR/headless-spotify.app"
+  elif [ -d "$SCRIPT_DIR/dist/headless-spotify.app" ]; then
+    MENUBAR_APP="$SCRIPT_DIR/dist/headless-spotify.app"
+  elif [ -f "$SCRIPT_DIR/scripts/build-menubar.sh" ]; then
+    "$SCRIPT_DIR/scripts/build-menubar.sh" >/dev/null 2>&1 || true
+    if [ -d "$SCRIPT_DIR/dist/headless-spotify.app" ]; then
+      MENUBAR_APP="$SCRIPT_DIR/dist/headless-spotify.app"
+    fi
+  fi
+  if [ -n "$MENUBAR_APP" ]; then
+    MENUBAR_DEST="/Applications/headless-spotify.app"
+    rm -rf "$MENUBAR_DEST"
+    cp -R "$MENUBAR_APP" "$MENUBAR_DEST"
+    echo "installed menu bar app -> $MENUBAR_DEST"
+    if sudo -u "$SUDO_USER" /usr/bin/open -g "$MENUBAR_DEST" 2>/dev/null; then
+      echo "menu bar app launched — click its icon in the top bar for the name + Quit menu"
+    else
+      echo "launch it any time with: open \"$MENUBAR_DEST\""
+    fi
+  else
+    echo "warning: menu bar app not built — run ./scripts/build-menubar.sh to get it" >&2
+  fi
+fi
+
+# 6. Watcher LaunchAgent: generate from the CLI (single source of truth) and
 #    bootstrap it as the console user so hiding survives updates + restarts.
 USER_HOME="$(dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
 if [ -n "$USER_HOME" ]; then

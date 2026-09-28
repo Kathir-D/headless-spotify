@@ -6,6 +6,9 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .executable(name: "headless-spotify", targets: ["HeadlessSpotify"]),
+        // Menu bar extra (NSStatusItem): the project name + Quit. Packaged as
+        // an LSUIElement .app by scripts/build-menubar.sh.
+        .executable(name: "headless-spotify-bar", targets: ["HeadlessSpotifyBar"]),
         // Accessory-policy injector dylib (DYLD_INSERT_LIBRARIES fallback).
         .library(name: "HeadlessSpotifyInjector", type: .dynamic, targets: ["CHeadlessInjector"]),
     ],
@@ -13,6 +16,15 @@ let package = Package(
         .executableTarget(
             name: "HeadlessSpotify",
             path: "Sources/HeadlessSpotify"
+        ),
+        .target(
+            name: "HeadlessSpotifyBarKit",
+            path: "Sources/HeadlessSpotifyBarKit"
+        ),
+        .executableTarget(
+            name: "HeadlessSpotifyBar",
+            dependencies: ["HeadlessSpotifyBarKit"],
+            path: "Sources/HeadlessSpotifyBar"
         ),
         .target(
             name: "CHeadlessInjector",
@@ -24,7 +36,7 @@ let package = Package(
         ),
         .testTarget(
             name: "HeadlessSpotifyTests",
-            dependencies: ["HeadlessSpotify"],
+            dependencies: ["HeadlessSpotify", "HeadlessSpotifyBarKit"],
             path: "Tests/HeadlessSpotifyTests"
         ),
     ]
