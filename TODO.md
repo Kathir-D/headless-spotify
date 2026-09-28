@@ -46,3 +46,15 @@
 ## 4. Key files
 
 - `Sources/HeadlessSpotify/*`, `install.sh`, `uninstall.sh`, `launchagent/*.plist`, `THIRD-PARTY-NOTICES.md`
+
+## 5. Homebrew + prod (formula, in same tap as Sonar)
+
+Why: `brew install headless-spotify` (CLI) pairs with `brew install --cask sonar`.
+
+### [ ] 5. `feat: release packaging (tarball + checksums)`
+- Do: `scripts/package-release.sh` → versioned tarball + `SHA256SUMS.txt` from git tag (`VERSION` file is source of truth); keep ad-hoc dev lane + signed release lane.
+- Done when: tarball installs on clean VM, `headless-spotify status` works.
+
+### [ ] 6. `feat: homebrew-tap formula`
+- Do: in `homebrew-tap` repo add `Formula/headless-spotify.rb` (url+sha256 of release tarball, `depends_on macos`, binary install + `launchagent` handling notes, `caveats` about `sudo ./install.sh` + Spotify-update watcher); `brew audit --strict`, `brew install/test/uninstall` on fresh user; CI bumps formula on every GitHub Release.
+- Done when: `brew tap you/tap && brew install headless-spotify && headless-spotify hide` works from scratch, uninstall restores Dock.
