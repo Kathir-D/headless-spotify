@@ -57,6 +57,22 @@ for artifact in headless-spotify libHeadlessSpotifyInjector.dylib; do
   fi
 done
 
+# Guard against shipping a single-arch tarball: every artifact must contain
+# exactly the architectures we asked for. A silent arm64-only release is the
+# kind of bug nobody notices until a user's Intel/ARM mismatch.
+WANT_ARCHS="$(echo $ARCHS | tr ' ' '\n' | sort | tr '\n' ' ')"
+check_archs() { # check_archs <path> <label>
+  got="$(lipo -archs "$1" 2>/dev/null | tr ' ' '\n' | sort | tr '\n' ' ')"
+  if [ "$got" != "$WANT_ARCHS" ]; then
+    echo "error: $2 archs are [$got], expected [$WANT_ARCHS]" >&2
+    exit 1
+  fi
+  echo "ok: $2 is [$got]"
+}
+check_archs "$BUILD_DIR/headless-spotify" "headless-spotify"
+check_archs "$BUILD_DIR/libHeadlessSpotifyInjector.dylib" "injector dylib"
+check_archs "$BUILD_DIR/headless-spotify-bar" "headless-spotify-bar"
+
 STAGE="dist/stage/headless-spotify-$VERSION"
 rm -rf "dist/stage"
 mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/launchagent"
@@ -68,8 +84,9 @@ chmod +x "$STAGE/install.sh" "$STAGE/uninstall.sh"
 
 # Menu bar extra as a ready-to-install LSUIElement .app at the tarball root,
 # so install.sh can drop it in /Applications without a toolchain. SKIP_BUILD
-# keeps whatever `swift build` just produced (universal when multi-arch).
-SKIP_BUILD=1 ./scripts/build-menubar.sh >/dev/null
+# + BUILD_DIR reuse exactly the products staged above (universal when
+# multi-arch) instead of re-detecting a build directory.
+SKIP_BUILD=1 BUILD_DIR="$BUILD_DIR" ./scripts/build-menubar.sh >/dev/null
 if [ -d "dist/headless-spotify.app" ]; then
   cp -R "dist/headless-spotify.app" "$STAGE/"
 else

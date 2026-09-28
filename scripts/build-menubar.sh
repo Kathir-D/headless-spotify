@@ -11,9 +11,10 @@
 # Output: dist/headless-spotify.app  (ad-hoc signed)
 #
 # Usage: ./scripts/build-menubar.sh
-#   CONFIG=debug      build the debug binary (default: release)
-#   OUT_DIR=<dir>     output directory (default: dist)
-#   SKIP_BUILD=1      reuse existing build products
+#   CONFIG=debug       build the debug binary (default: release)
+#   OUT_DIR=<dir>      output directory (default: dist)
+#   BUILD_DIR=<dir>    package an already-built binary (skips detection)
+#   SKIP_BUILD=1       reuse existing build products
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -31,18 +32,49 @@ if [ -z "${SKIP_BUILD:-}" ]; then
   swift build -c "$CONFIG" --product "$EXECUTABLE"
 fi
 
-# Multi-arch builds land in .build/apple/Products/<Config>; single-arch in
-# .build/<triple>/<config>. Detect whichever swift just produced.
-BUILD_DIR="$SCRIPT_DIR/.build/$CONFIG"
-if [ ! -f "$BUILD_DIR/$EXECUTABLE" ]; then
-  CANDIDATE="$(find "$SCRIPT_DIR/.build" -path "*Products/$CONFIG/$EXECUTABLE" -type f 2>/dev/null | head -1 || true)"
-  if [ -z "$CANDIDATE" ]; then
-    CANDIDATE="$(find "$SCRIPT_DIR/.build" -path "*$CONFIG/$EXECUTABLE" -type f 2>/dev/null | head -1 || true)"
+# Which build products to package. Callers that already resolved a build dir
+# (scripts/package-release.sh) pass BUILD_DIR so there is no second guess.
+# Multi-arch builds land in .build/apple/Products/<Release|Debug> (capitalised);
+# single-arch builds in .build/<triple>/<config> (lowercase). Both exist
+# depending on the toolchain, so check them explicitly.
+case "$CONFIG" in
+  release) PRODUCTS_CONFIG="Release" ;;
+  debug)   PRODUCTS_CONFIG="Debug" ;;
+  *)       PRODUCTS_CONFIG="$CONFIG" ;;
+esac
+if [ -n "${BUILD_DIR:-}" ] && [ -f "$BUILD_DIR/$EXECUTABLE" ]; then
+  :
+else
+  BUILD_DIR=""
+  for candidate in \
+    "$SCRIPT_DIR/.build/apple/Products/$PRODUCTS_CONFIG" \
+    "$SCRIPT_DIR/.build/$CONFIG"; do
+    if [ -f "$candidate/$EXECUTABLE" ]; then
+      BUILD_DIR="$candidate"
+      break
+    fi
+  done
+  if [ -z "$BUILD_DIR" ]; then
+    # Last resort, and deliberately strict. A bare `find -name` also matches
+    # SwiftPM intermediates (.build/**/Intermediates.noindex/.../Binary/) and
+    # dSYM payloads — all of which are Mach-O files that are NOT the product.
+    # Only accept the executable sitting directly in a products directory or
+    # in a per-triple <config> directory.
+    for pattern in \
+      ".*/Products/$PRODUCTS_CONFIG/$EXECUTABLE" \
+      ".*/$CONFIG/$EXECUTABLE" \
+      ".*/Products/[^/]+/$EXECUTABLE" \
+      ".*/(release|Release)/$EXECUTABLE"; do
+      CANDIDATE="$(find "$SCRIPT_DIR/.build" -type f -regex "$pattern" 2>/dev/null | head -1 || true)"
+      if [ -n "$CANDIDATE" ]; then
+        BUILD_DIR="$(dirname "$CANDIDATE")"
+        break
+      fi
+    done
   fi
-  if [ -n "$CANDIDATE" ]; then BUILD_DIR="$(dirname "$CANDIDATE")"; fi
 fi
-if [ ! -f "$BUILD_DIR/$EXECUTABLE" ]; then
-  echo "error: $BUILD_DIR/$EXECUTABLE not found (build failed?)" >&2
+if [ -z "$BUILD_DIR" ] || [ ! -f "$BUILD_DIR/$EXECUTABLE" ]; then
+  echo "error: could not find a built $EXECUTABLE under $SCRIPT_DIR/.build (build failed?)" >&2
   exit 1
 fi
 echo "binary from $BUILD_DIR"
@@ -52,6 +84,12 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BUILD_DIR/$EXECUTABLE" "$APP/Contents/MacOS/$EXECUTABLE"
 chmod +x "$APP/Contents/MacOS/$EXECUTABLE"
+# Never ship a stub, an object file, or an empty file as the executable.
+if ! /usr/bin/file "$APP/Contents/MacOS/$EXECUTABLE" 2>/dev/null | grep -q "Mach-O"; then
+  echo "error: $BUILD_DIR/$EXECUTABLE is not a Mach-O executable — refusing to package it" >&2
+  rm -rf "$APP"
+  exit 1
+fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
