@@ -141,8 +141,8 @@ Full texts: see `THIRD-PARTY-NOTICES.md` + `LICENSE`.
 ## Developing
 
 ```sh
-swift build          # CLI + injector dylib
-swift test           # 31 tests, all offline-safe (fixtures, stubbed runners)
+swift build          # CLI + injector dylib (Xcode Command Line Tools are enough)
+swift test           # 52 tests, all offline-safe (fixtures, stubbed runners; needs full Xcode)
 ./scripts/package-release.sh   # versioned tarball + SHA256SUMS.txt (see VERSION)
 ```
 

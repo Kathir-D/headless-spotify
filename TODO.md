@@ -20,22 +20,22 @@
 
 ## 2. Task list (in order)
 
-### [ ] 1. `chore: init SPM CLI`
+### [x] 1. `chore: init SPM CLI`
 - Why: testable foundation for installer/launcher logic.
 - Do: `Package.swift` (macOS 15 executable `headless-spotify`), `Sources/HeadlessSpotify/main.swift` (`status|hide|restore` subcommands stub), `install.sh`/`uninstall.sh` stubs, `launchagent/` stub; `swift build` + `swift test` green.
 - Done when: `--help` works, stubs committed.
 
-### [ ] 2. `feat: LSUIElement mode + ensure-running launcher`
+### [x] 2. `feat: LSUIElement mode + ensure-running launcher`
 - Why: 80% case, one-line fix.
 - Do: backup plist, `defaults write ... LSUIElement true`, re-sign note (ad-hoc breaks Spotify sig — document), restart Spotify headless, poll `player state` ≤10 s, `status` verifies Dock absence + scriptability.
 - Done when: Spotify runs with no Dock, Sonar `player state` + play/pause/volume work, `restore` brings Dock back.
 
-### [ ] 3. `feat: injector fallback + watcher + persistence`
+### [x] 3. `feat: injector fallback + watcher + persistence`
 - Why: Spotify overrides plist / updates wipe it.
 - Do: injector dylib forcing Accessory; detect Dock-return → auto-fallback; LaunchAgent watcher re-applies after updates; `SMAppService` login-item option; document Accessibility/permissions if needed.
 - Done when: kill-and-relaunch + simulated update keeps app headless; windows usable; Cmd-Tab clean.
 
-### [ ] 4. `docs: README + NOTICES + compat matrix`
+### [x] 4. `docs: README + NOTICES + compat matrix`
 - Why: fresh rewrite required.
 - Do: install/uninstall, verify (`tell application "Spotify" to get player state`), troubleshooting (update wipes, re-sign, TCC), Credits table, Sonar compat matrix (normal / plist-headless / injector-headless × play/pause/volume/track).
 - Done when: fresh Mac follows README with no extra help.
@@ -52,10 +52,10 @@
 
 Why: `brew install headless-spotify` (CLI) pairs with `brew install --cask sonar`.
 
-### [ ] 5. `feat: release packaging (tarball + checksums)`
+### [x] 5. `feat: release packaging (tarball + checksums)`
 - Do: `scripts/package-release.sh` → versioned tarball + `SHA256SUMS.txt` from git tag (`VERSION` file is source of truth); keep ad-hoc dev lane + signed release lane.
 - Done when: tarball installs on clean VM, `headless-spotify status` works.
 
-### [ ] 6. `feat: homebrew-tap formula`
+### [x] 6. `feat: homebrew-tap formula`
 - Do: in `homebrew-tap` repo add `Formula/headless-spotify.rb` (url+sha256 of release tarball, `depends_on macos`, binary install + `launchagent` handling notes, `caveats` about `sudo ./install.sh` + Spotify-update watcher); `brew audit --strict`, `brew install/test/uninstall` on fresh user; CI bumps formula on every GitHub Release.
 - Done when: `brew tap you/tap && brew install headless-spotify && headless-spotify hide` works from scratch, uninstall restores Dock.
