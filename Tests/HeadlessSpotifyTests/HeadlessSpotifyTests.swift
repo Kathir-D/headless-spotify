@@ -360,6 +360,46 @@ struct AgentPlistTests {
         #expect(AgentPlist.agentPlistPath(homeDirectory: "/Users/ada") == "/Users/ada/Library/LaunchAgents/com.headless-spotify.watcher.plist")
     }
 }
+@Suite("hide/restore cycle on a fixture bundle (real plist + codesign, no relaunch)")
+struct RunnerFixtureCycleTests {
+    func makeFixture() throws -> String {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headless-cycle-\(UUID().uuidString)")
+        let contents = dir.appendingPathComponent("Spotify.app/Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": "com.spotify.client",
+            "CFBundleShortVersionString": "9.9.9",
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: contents.appendingPathComponent("Info.plist"))
+        return dir.appendingPathComponent("Spotify.app").path
+    }
+
+    @Test("hide --skip-relaunch then restore --skip-relaunch round-trips")
+    func hideRestoreCycle() async throws {
+        let app = try makeFixture()
+        let out = RunnerDryRunTests.Lines()
+        let err = RunnerDryRunTests.Lines()
+
+        let hideCode = await Runner.run(
+            Invocation(subcommand: .hide, spotifyAppPath: app, skipRelaunch: true),
+            output: { out.values.append($0) }, errorOutput: { err.values.append($0) }
+        )
+        #expect(hideCode == 0)
+        #expect(try SpotifyPlist(appPath: app).readLSUIElement() == true)
+        #expect(SpotifyPlist(appPath: app).hasBackup)
+
+        let restoreCode = await Runner.run(
+            Invocation(subcommand: .restore, spotifyAppPath: app, skipRelaunch: true),
+            output: { out.values.append($0) }, errorOutput: { err.values.append($0) }
+        )
+        #expect(restoreCode == 0)
+        #expect(try SpotifyPlist(appPath: app).readLSUIElement() == nil)
+        #expect(!SpotifyPlist(appPath: app).hasBackup)
+    }
+}
+
 @Suite("Control (stubbed runner)")
 struct ControlTests {
     final class Calls: @unchecked Sendable { var scripts: [String] = [] }
