@@ -284,14 +284,41 @@ struct InjectorTests {
         #expect(!Injector.isHardenedRuntime(appPath: "/tmp/Fixture.app", run: plain))
     }
 
+    /// Run `body` with HEADLESS_INJECTOR_DYLIB removed (parallel-safe).
+    func withoutEnvOverride<T>(_ body: () throws -> T) rethrows -> T {
+        let saved = ProcessInfo.processInfo.environment[Injector.envOverride]
+        unsetenv(Injector.envOverride)
+        defer {
+            if let saved { setenv(Injector.envOverride, saved, 1) } else { unsetenv(Injector.envOverride) }
+        }
+        return try body()
+    }
+
     @Test("locate order: explicit > env > installed")
-    func locateOrder() {
+    func locateOrder() throws {
         #expect(Injector.locate(explicit: "/tmp/a.dylib") == "/tmp/a.dylib")
         let saved = ProcessInfo.processInfo.environment[Injector.envOverride]
         setenv(Injector.envOverride, "/tmp/env.dylib", 1)
         #expect(Injector.locate(explicit: nil) == "/tmp/env.dylib")
         if let saved { setenv(Injector.envOverride, saved, 1) } else { unsetenv(Injector.envOverride) }
-        #expect(Injector.locate(explicit: "", cliBinaryPath: "/nonexistent/cli") == nil)
+        try withoutEnvOverride {
+            #expect(Injector.locate(explicit: "", cliBinaryPath: "/nonexistent/cli") == nil)
+        }
+    }
+
+    @Test("locate finds brew-layout dylib relative to CLI")
+    func locateBrewLayout() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("brew-\(UUID().uuidString)")
+        let bin = root.appendingPathComponent("bin")
+        let lib = root.appendingPathComponent("lib")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: lib, withIntermediateDirectories: true)
+        let dylib = lib.appendingPathComponent(Injector.dylibFileName)
+        try Data().write(to: dylib)
+        try withoutEnvOverride {
+            let found = Injector.locate(explicit: nil, cliBinaryPath: bin.appendingPathComponent("headless-spotify").path)
+            #expect(found == dylib.standardized.path)
+        }
     }
 }
 

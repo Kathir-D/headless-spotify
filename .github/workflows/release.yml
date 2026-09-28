@@ -1,0 +1,41 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check VERSION matches tag
+        run: |
+          test "v$(tr -d ' \t\r\n' < VERSION)" = "${{ github.ref_name }}" || {
+            echo "tag ${{ github.ref_name }} != VERSION $(cat VERSION)"; exit 1; }
+      - name: Build release tarball
+        run: ./scripts/package-release.sh
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/headless-spotify-*-macos.tar.gz
+            dist/SHA256SUMS.txt
+      - name: Bump formula to this release
+        run: |
+          VERSION="$(tr -d ' \t\r\n' < VERSION)"
+          SHA="$(cut -d' ' -f1 < dist/SHA256SUMS.txt)"
+          URL="https://github.com/Kathir-D/headless-spotify/releases/download/v$VERSION/headless-spotify-$VERSION-macos.tar.gz"
+          python3 - "$SHA" "$URL" <<'EOF'
+          import re, sys
+          sha, url = sys.argv[1], sys.argv[2]
+          p = "Formula/headless-spotify.rb"
+          s = open(p).read()
+          s = re.sub(r'url ".*"', f'url "{url}"', s)
+          s = re.sub(r'sha256 ".*"', f'sha256 "{sha}"', s)
+          open(p, "w").write(s)
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/headless-spotify.rb
+          git commit -m "chore: bump formula to v$VERSION" && git push

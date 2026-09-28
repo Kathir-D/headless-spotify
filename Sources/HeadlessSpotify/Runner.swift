@@ -194,7 +194,7 @@ public enum Runner {
             case .plist:
                 return await relaunchAndVerify(inv, output: output, errorOutput: errorOutput, useInjector: nil)
             case .injector:
-                guard let dylib = Injector.locate(explicit: inv.injectorPath) else {
+                guard let dylib = Injector.locate(explicit: inv.injectorPath, cliBinaryPath: CommandLine.arguments.first) else {
                     errorOutput("hide: injector dylib not found — pass --injector <path> or install it (sudo ./install.sh)")
                     return 1
                 }
@@ -204,7 +204,7 @@ public enum Runner {
                 let code = await relaunchAndVerify(inv, output: output, errorOutput: errorOutput, useInjector: nil)
                 if code == 0 { return 0 }
                 // Plist mode verified but Dock survived (or verify failed) → fallback.
-                guard let dylib = Injector.locate(explicit: inv.injectorPath) else {
+                guard let dylib = Injector.locate(explicit: inv.injectorPath, cliBinaryPath: CommandLine.arguments.first) else {
                     errorOutput("hide: plist mode did not hide the Dock and no injector dylib is installed.")
                     return code
                 }
@@ -245,10 +245,15 @@ public enum Runner {
         output("hide: waiting for AppleScript (≤\(Int(inv.timeout))s)…")
         guard let state = SpotifyScripting.waitForScripting(timeout: inv.timeout) else {
             errorOutput("hide: Spotify did not answer AppleScript within \(Int(inv.timeout))s")
+            errorOutput("hide: hiding failed — run `headless-spotify restore --spotify-app \(inv.spotifyAppPath)` to return Spotify to normal.")
+            errorOutput("hide: note — Spotify ≥1.3.1 exits on launch when LSUIElement=true is present (verified 2026-09-28); plist mode is blocked on current Spotify.")
             return 1
         }
         let presence = await SpotifyState.dockPresence()
         output("hide: ready — player state: \(state), Dock: \(presence.rawValue)")
+        if presence != .hidden {
+            errorOutput("hide: Dock still visible — run `headless-spotify restore --spotify-app \(inv.spotifyAppPath)` to return Spotify to normal.")
+        }
         return presence == .hidden ? 0 : 1
     }
 

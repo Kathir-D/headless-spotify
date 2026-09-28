@@ -8,6 +8,7 @@
 - Method 1 (simple): `defaults write .../Spotify.app/Contents/Info.plist LSUIElement true` (from `4ian/hide-spotify-from-dock`, MIT). Fragile: wiped on Spotify updates, breaks Spotify code signature.
 - Method 2 (robust fallback): force `setActivationPolicy: → Accessory` injector + watcher (concept from `hide-macos-app-dock-icon`, MIT). Survives restarts, removes Dock + switcher, keeps windows.
 - Do both with fallback: try plist, fall back to injector when Dock returns.
+- ⚠️ **Verified 2026-09-28 (Spotify 1.3.1.234, macOS 26.5.2, arm64): BOTH methods are currently blocked by Spotify itself — LSUIElement=true makes Spotify exit silently on launch (even plain `open -a`), and the hardened runtime strips DYLD_* so the injector is ignored.** The CLI implements everything and fails honestly (exit 1 + `restore` pointer). Re-verify on each Spotify update; no code changes needed if Spotify honors LSUIElement again.
 
 ## 1. Hard rules
 

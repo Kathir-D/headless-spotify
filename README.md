@@ -14,11 +14,20 @@ Two hiding methods, tried in order (`hide --mode auto`, the default):
    Spotify headless (`NSWorkspace.openApplication(activates:false)`) and polls
    `player state` for up to 10 s. Concept credit:
    [4ian/hide-spotify-from-dock](https://github.com/4ian/hide-spotify-from-dock) (MIT).
+   > ⛔ **Blocked on Spotify ≥1.3.1 (verified 2026-09-28, macOS 26):** with
+   > `LSUIElement=true` present (ad-hoc seal, `codesign --verify` clean),
+   > Spotify 1.3.1.234 exits silently on launch — plain `open -a Spotify`
+   > fails too; removing the key restores launching. So on current Spotify the
+   > plist path cannot produce a running app, and `hide` exits 1 with a
+   > pointer to `restore`. If Spotify ever honors LSUIElement again, no code
+   > changes are needed — only this notice.
 2. **Injector fallback.** If the Dock icon survives plist mode, Spotify is
    relaunched with `DYLD_INSERT_LIBRARIES` pointing at
    `libHeadlessSpotifyInjector.dylib`, whose constructor forces
    `setActivationPolicy: → Accessory`. Concept credit:
    [michaelmitchell-bit/hide-macos-app-dock-icon](https://github.com/michaelmitchell-bit/hide-macos-app-dock-icon) (MIT).
+   The mechanism is verified working (test fixture flips prohibited→accessory,
+   bundle-ID gate holds).
    **Known limit:** hardened-runtime binaries (current official Spotify.app)
    strip `DYLD_*` variables at exec, so the injector is ignored there and plist
    mode stays primary. The dylib is bundle-ID gated to `com.spotify.client`,
@@ -88,16 +97,19 @@ Match by `bundleID == com.spotify.client`, never by Dock/window.
 | Spotify mode | Sonar sees it | Control |
 |---|---|---|
 | Normal | yes | play/pause/volume/track |
-| Headless (`LSUIElement`) | yes | same |
-| Headless (injector) | yes | same |
+| Headless (`LSUIElement`) | yes — **blocked on Spotify ≥1.3.1**, see above | same (when Spotify honors the key) |
+| Headless (injector) | yes — **blocked by hardened runtime**, see above | same (when injection applies) |
 
 Both headless modes keep the same bundle ID and scripting dictionary, so
-Sonar needs no changes between rows.
+Sonar needs no changes between rows. Today, only the Normal row runs on
+Spotify 1.3.1; the CLI enforces this honestly (`hide` exits 1, `status`
+reports not-headless, `restore` returns to normal).
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| `hide` exits 1, Spotify won't stay launched headless | Spotify ≥1.3.1 quits when `LSUIElement=true` is present | Run `headless-spotify restore`; track Spotify releases — no code change needed if they honor the key again |
 | Dock icon back after Spotify update | Updates rewrite `Info.plist` | Watcher re-applies automatically; or re-run `headless-spotify hide` |
 | `hide` says bundle not writable | Root-owned `/Applications` copy | Run `sudo ./install.sh` (the one sudo step) |
 | Spotify won't launch after `hide` | Edited bundle, re-sign failed | Re-run `hide` (look for the re-sign error), or `restore` + reinstall Spotify |

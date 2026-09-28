@@ -20,14 +20,22 @@ public enum Injector: Sendable {
     public static let envOverride = "HEADLESS_INJECTOR_DYLIB"
 
     /// Resolution order: --injector flag > $HEADLESS_INJECTOR_DYLIB >
-    /// /usr/local/lib/headless-spotify/… > dylib next to the CLI binary (dev).
+    /// /usr/local/lib/headless-spotify/… > paths relative to the CLI binary
+    /// (dev side-by-side, Homebrew bin/../lib, /usr/local layout).
     public static func locate(explicit: String?, cliBinaryPath: String? = nil) -> String? {
         if let explicit, !explicit.isEmpty { return explicit }
         if let env = ProcessInfo.processInfo.environment[envOverride], !env.isEmpty { return env }
         if FileManager.default.fileExists(atPath: installedPath) { return installedPath }
         if let cli = cliBinaryPath {
-            let neighbor = URL(fileURLWithPath: cli).deletingLastPathComponent().appendingPathComponent(dylibFileName).path
-            if FileManager.default.fileExists(atPath: neighbor) { return neighbor }
+            let dir = URL(fileURLWithPath: cli).deletingLastPathComponent()
+            for candidate in [
+                dir.appendingPathComponent(dylibFileName),
+                dir.appendingPathComponent("../lib/\(dylibFileName)"),
+                dir.appendingPathComponent("../lib/headless-spotify/\(dylibFileName)"),
+            ] {
+                let path = candidate.standardized.path
+                if FileManager.default.fileExists(atPath: path) { return path }
+            }
         }
         return nil
     }
