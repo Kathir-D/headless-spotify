@@ -19,6 +19,14 @@ struct CLIParseTests {
         }
     }
 
+    @Test("--version / -v flag")
+    func versionFlag() throws {
+        for flag in ["-v", "--version"] {
+            let result = CLI.parse(["headless-spotify", flag])
+            #expect(try result.get().showVersion == true)
+        }
+    }
+
     @Test("subcommands parse", arguments: ["status", "hide", "restore", "watch", "control"])
     func subcommandsParse(name: String) throws {
         let result = CLI.parse(["headless-spotify", name])
@@ -198,8 +206,8 @@ struct RunnerDryRunTests {
         #expect(!errors.values.isEmpty)
     }
 
-    @Test("watch stub exits 0")
-    func watchStub() async {
+    @Test("watch on missing app exits 2")
+    func watchMissingApp() async {
         let lines = Lines()
         let code = await Runner.run(
             Invocation(subcommand: .watch, spotifyAppPath: "/nonexistent/Spotify.app"),

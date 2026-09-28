@@ -13,12 +13,12 @@ public enum Runner {
         output: @Sendable (String) -> Void = { print($0) },
         errorOutput: @Sendable (String) -> Void = { fputs($0 + "\n", stderr) }
     ) async -> Int32 {
-        if invocation.showHelp || invocation.subcommand == nil {
-            output(CLI.helpText)
-            return 0
-        }
         if invocation.showVersion {
             output("headless-spotify \(CLI.version)")
+            return 0
+        }
+        if invocation.showHelp || invocation.subcommand == nil {
+            output(CLI.helpText)
             return 0
         }
         switch invocation.subcommand {
