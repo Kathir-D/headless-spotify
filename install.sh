@@ -7,7 +7,8 @@
 #      LSUIElement=true, ad-hoc re-sign (credit: 4ian/hide-spotify-from-dock).
 #   3. `hide --skip-plist` as the console user: relaunch headless
 #      (activates:false) and verify `player state` (<=10 s default).
-#   4. Stage the watcher LaunchAgent file (unloaded until task 3 wires it).
+#   4. Install the injector dylib to /usr/local/lib/headless-spotify/.
+#   5. Generate + bootstrap the watcher LaunchAgent as the console user.
 #
 # Usage: sudo ./install.sh [/Applications/Spotify.app]
 set -eu
@@ -52,13 +53,30 @@ fi
 # 3. Relaunch + verify as the console user.
 sudo -u "$SUDO_USER" "$BIN" hide --skip-plist --spotify-app "$SPOTIFY_APP"
 
-# 4. Stage watcher agent file (kept unloaded; task 3 activates it).
+# 4. Injector dylib (fallback for Dock-return when plist mode is insufficient).
+DYLIB_SRC="$SCRIPT_DIR/.build/release/libHeadlessSpotifyInjector.dylib"
+if [ -n "${HEADLESS_DYLIB:-}" ]; then
+  DYLIB_SRC="$HEADLESS_DYLIB"
+fi
+if [ -f "$DYLIB_SRC" ]; then
+  mkdir -p /usr/local/lib/headless-spotify
+  install -m 0644 "$DYLIB_SRC" /usr/local/lib/headless-spotify/
+  echo "installed injector dylib"
+else
+  echo "warning: injector dylib not built ($DYLIB_SRC missing) — plist mode only." >&2
+fi
+
+# 5. Watcher LaunchAgent: generate from the CLI (single source of truth) and
+#    bootstrap it as the console user so hiding survives updates + restarts.
 USER_HOME="$(dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
-if [ -n "$USER_HOME" ] && [ -f "$SCRIPT_DIR/launchagent/com.headless-spotify.watcher.plist" ]; then
+if [ -n "$USER_HOME" ]; then
   AGENTS_DIR="$USER_HOME/Library/LaunchAgents"
   sudo -u "$SUDO_USER" mkdir -p "$AGENTS_DIR"
-  sudo -u "$SUDO_USER" cp "$SCRIPT_DIR/launchagent/com.headless-spotify.watcher.plist" "$AGENTS_DIR/"
-  echo "staged LaunchAgent (unloaded until task 3): $AGENTS_DIR/com.headless-spotify.watcher.plist"
+  sudo -u "$SUDO_USER" "$BIN" watch --print-agent-plist --spotify-app "$SPOTIFY_APP" --interval 15 > "$AGENTS_DIR/com.headless-spotify.watcher.plist"
+  chown "$SUDO_USER" "$AGENTS_DIR/com.headless-spotify.watcher.plist"
+  sudo -u "$SUDO_USER" /bin/launchctl bootout "gui/$(id -u "$SUDO_USER")" "$AGENTS_DIR/com.headless-spotify.watcher.plist" 2>/dev/null || true
+  sudo -u "$SUDO_USER" /bin/launchctl bootstrap "gui/$(id -u "$SUDO_USER")" "$AGENTS_DIR/com.headless-spotify.watcher.plist"
+  echo "watcher agent loaded"
 fi
 
 echo "done: Spotify is headless. Verify any time with: headless-spotify status"

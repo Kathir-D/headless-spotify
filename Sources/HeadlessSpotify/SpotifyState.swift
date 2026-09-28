@@ -43,11 +43,26 @@ public enum SpotifyState: Sendable {
     /// Launch without activating (no Dock bounce, no focus steal).
     /// For an LSUIElement bundle this also means no Dock icon, ever.
     public static func launchHeadless(appPath: String) async throws -> Bool {
+        try await launch(appPath: appPath, activates: false, environment: nil)
+    }
+
+    /// Injector fallback launch: same headless launch plus DYLD_INSERT_LIBRARIES.
+    /// Ignored by hardened-runtime hosts (they strip DYLD_* at exec).
+    public static func launchWithInjector(appPath: String, dylibPath: String) async throws -> Bool {
+        try await launch(appPath: appPath, activates: false, environment: ["DYLD_INSERT_LIBRARIES": dylibPath])
+    }
+
+    public static func launch(appPath: String, activates: Bool, environment: [String: String]?) async throws -> Bool {
         let url = URL(fileURLWithPath: appPath)
         return try await withCheckedThrowingContinuation { continuation in
             let config = NSWorkspace.OpenConfiguration()
-            config.activates = false
+            config.activates = activates
             config.hides = false
+            if let environment {
+                for (key, value) in environment {
+                    config.environment[key] = value
+                }
+            }
             NSWorkspace.shared.openApplication(at: url, configuration: config) { app, error in
                 if let error {
                     continuation.resume(throwing: error)

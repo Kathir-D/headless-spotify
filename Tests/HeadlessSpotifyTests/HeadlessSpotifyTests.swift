@@ -67,6 +67,23 @@ struct CLIParseTests {
         #expect(inv.skipRelaunch && inv.skipPlist && inv.noResign && inv.json && inv.dryRun)
     }
 
+    @Test("task 3 flags parse")
+    func task3FlagsParse() throws {
+        let inv = try CLI.parse([
+            "headless-spotify", "hide", "--mode=injector", "--injector=/tmp/x.dylib",
+        ]).get()
+        #expect(inv.mode == .injector)
+        #expect(inv.injectorPath == "/tmp/x.dylib")
+        let bad = CLI.parse(["headless-spotify", "hide", "--mode", "cloak"])
+        #expect(bad == .failure(.invalidValue(flag: "--mode", value: "cloak")))
+        let watch = try CLI.parse([
+            "headless-spotify", "watch", "--interval", "30", "--iterations=2",
+            "--install-agent", "--uninstall-agent", "--print-agent-plist",
+        ]).get()
+        #expect(watch.interval == 30 && watch.iterations == 2)
+        #expect(watch.installAgent && watch.uninstallAgent && watch.printAgentPlist)
+    }
+
     @Test("help text states the Sonar contract")
     func helpMentionsContract() {
         #expect(CLI.helpText.contains("com.spotify.client"))
@@ -169,11 +186,23 @@ struct RunnerDryRunTests {
     func watchStub() async {
         let lines = Lines()
         let code = await Runner.run(
-            Invocation(subcommand: .watch),
+            Invocation(subcommand: .watch, spotifyAppPath: "/nonexistent/Spotify.app"),
+            output: { lines.values.append($0) },
+            errorOutput: { _ in }
+        )
+        #expect(code == 2)
+    }
+
+    @Test("watch --dry-run prints plan, exit 0")
+    func watchDryRun() async {
+        let lines = Lines()
+        let code = await Runner.run(
+            Invocation(subcommand: .watch, dryRun: true),
             output: { lines.values.append($0) },
             errorOutput: { _ in }
         )
         #expect(code == 0)
+        #expect(lines.values.joined().contains("watch plan"))
     }
 
     @Test("status JSON parses")
@@ -191,10 +220,106 @@ struct RunnerDryRunTests {
     }
 }
 
+@Suite("Watcher decision matrix")
+struct WatcherTests {
+    func report(
+        installed: Bool = true, running: Bool = true, lsui: Bool? = true,
+        dock: DockPresence = .hidden, player: String? = "playing"
+    ) -> Runner.StatusReport {
+        Runner.StatusReport(
+            appPath: "/Applications/Spotify.app", installed: installed, running: running,
+            lsuiElement: lsui, dock: dock, playerState: player, hasBackup: true
+        )
+    }
+
+    @Test("steady headless state → none")
+    func steadyNone() {
+        #expect(Watcher.decide(report: report(), lastSeenVersion: "1.0", currentVersion: "1.0", plistFailures: 0) == .none)
+    }
+
+    @Test("not installed / not running → none (never launch unasked)")
+    func idleNone() {
+        #expect(Watcher.decide(report: report(installed: false), lastSeenVersion: nil, currentVersion: nil, plistFailures: 0) == .none)
+        #expect(Watcher.decide(report: report(running: false, dock: .notRunning, player: nil), lastSeenVersion: "1.0", currentVersion: "1.0", plistFailures: 0) == .none)
+    }
+
+    @Test("version change → reapplyPlist (update wiped it)")
+    func updateReapplies() {
+        let action = Watcher.decide(report: report(), lastSeenVersion: "1.0", currentVersion: "1.1", plistFailures: 0)
+        #expect(action == .reapplyPlist(reason: "Spotify updated (1.0 → 1.1); re-applying LSUIElement"))
+    }
+
+    @Test("LSUIElement missing → reapplyPlist")
+    func lsuiMissingReapplies() {
+        let action = Watcher.decide(report: report(lsui: nil, dock: .visible), lastSeenVersion: "1.0", currentVersion: "1.0", plistFailures: 0)
+        if case .reapplyPlist = action {} else { Issue.record("expected reapplyPlist, got \(action)") }
+    }
+
+    @Test("Dock visible once → relaunch; twice → injector fallback")
+    func dockReturnEscalates() {
+        let first = Watcher.decide(report: report(dock: .visible), lastSeenVersion: "1.0", currentVersion: "1.0", plistFailures: 0)
+        if case .relaunchHeadless = first {} else { Issue.record("expected relaunchHeadless, got \(first)") }
+        let second = Watcher.decide(report: report(dock: .visible), lastSeenVersion: "1.0", currentVersion: "1.0", plistFailures: 1)
+        if case .injectorFallback = second {} else { Issue.record("expected injectorFallback, got \(second)") }
+    }
+
+    @Test("headless but mute → relaunch")
+    func muteRelaunches() {
+        let action = Watcher.decide(report: report(player: nil), lastSeenVersion: "1.0", currentVersion: "1.0", plistFailures: 0)
+        if case .relaunchHeadless = action {} else { Issue.record("expected relaunchHeadless, got \(action)") }
+    }
+}
+
+@Suite("Injector helpers")
+struct InjectorTests {
+    @Test("hardened runtime detected from codesign output")
+    func hardenedDetected() {
+        let hardened: SpotifyScripting.Runner = { _, _ in
+            ProcessResult(exitCode: 0, stdout: "", stderr: "Identifier=com.spotify.client\nflags=0x10000(runtime) hashes=2551+7 location=embedded\n")
+        }
+        #expect(Injector.isHardenedRuntime(appPath: "/Applications/Spotify.app", run: hardened))
+        let plain: SpotifyScripting.Runner = { _, _ in
+            ProcessResult(exitCode: 0, stdout: "", stderr: "Identifier=com.example.Fixture\nflags=0x0(none) hashes=1+1 location=embedded\n")
+        }
+        #expect(!Injector.isHardenedRuntime(appPath: "/tmp/Fixture.app", run: plain))
+    }
+
+    @Test("locate order: explicit > env > installed")
+    func locateOrder() {
+        #expect(Injector.locate(explicit: "/tmp/a.dylib") == "/tmp/a.dylib")
+        let saved = ProcessInfo.processInfo.environment[Injector.envOverride]
+        setenv(Injector.envOverride, "/tmp/env.dylib", 1)
+        #expect(Injector.locate(explicit: nil) == "/tmp/env.dylib")
+        if let saved { setenv(Injector.envOverride, saved, 1) } else { unsetenv(Injector.envOverride) }
+        #expect(Injector.locate(explicit: "", cliBinaryPath: "/nonexistent/cli") == nil)
+    }
+}
+
+@Suite("AgentPlist")
+struct AgentPlistTests {
+    @Test("generated plist is valid XML with our label")
+    func validPlist() throws {
+        let text = AgentPlist.contents(binaryPath: "/usr/local/bin/headless-spotify", spotifyAppPath: "/Applications/Spotify.app", interval: 15)
+        let data = text.data(using: .utf8)!
+        var format = PropertyListSerialization.PropertyListFormat.xml
+        let obj = try PropertyListSerialization.propertyList(from: data, format: &format) as? [String: Any]
+        #expect(obj?["Label"] as? String == AgentPlist.label)
+        let args = obj?["ProgramArguments"] as? [String]
+        #expect(args?.first == "/usr/local/bin/headless-spotify")
+        #expect(args?.contains("watch") == true)
+        #expect(obj?["KeepAlive"] as? Bool == true)
+        let paths = obj?["WatchPaths"] as? [String]
+        #expect(paths == ["/Applications/Spotify.app/Contents/Info.plist"])
+    }
+
+    @Test("agent path joins home correctly")
+    func agentPath() {
+        #expect(AgentPlist.agentPlistPath(homeDirectory: "/Users/ada") == "/Users/ada/Library/LaunchAgents/com.headless-spotify.watcher.plist")
+    }
+}
 @Suite("SpotifyScripting with stubbed runner")
 struct ScriptingTests {
-    final class Box: @unchecked Sendable {
-        var calls: [String] = []
+    final class Box: @unchecked Sendable {        var calls: [String] = []
         var n = 0
     }
 

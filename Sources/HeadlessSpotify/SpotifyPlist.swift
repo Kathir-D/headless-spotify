@@ -58,6 +58,16 @@ public struct SpotifyPlist: Sendable {
         FileManager.default.isWritableFile(atPath: infoPlistURL.path)
     }
 
+    /// Installed app version (CFBundleShortVersionString). Used by the watcher
+    /// to detect self-updates (which wipe Info.plist customizations).
+    public func appVersion() -> String? {
+        guard let data = try? Data(contentsOf: infoPlistURL),
+              var format = Optional(PropertyListSerialization.PropertyListFormat.xml),
+              let dict = try? PropertyListSerialization.propertyList(from: data, format: &format) as? [String: Any]
+        else { return nil }
+        return dict["CFBundleShortVersionString"] as? String
+    }
+
     /// Current LSUIElement value. nil = key absent (normal Dock mode).
     public func readLSUIElement() throws -> Bool? {
         guard appExists else { throw PlistError.appNotFound(appPath) }

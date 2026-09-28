@@ -33,6 +33,19 @@ public struct Invocation: Sendable, Equatable {
     public var json: Bool
     /// Print the plan without changing anything.
     public var dryRun: Bool
+    /// `hide`: plist (default primary), injector, or auto (plist → injector fallback).
+    public var mode: HideMode
+    /// Explicit injector dylib path (else $HEADLESS_INJECTOR_DYLIB, install dir, CLI neighbor).
+    public var injectorPath: String?
+    /// `watch`: seconds between passes (default 15).
+    public var interval: TimeInterval
+    /// `watch`: run N passes then exit (0 = forever; for debugging/tests).
+    public var iterations: Int
+    /// `watch --install-agent/--uninstall-agent`: manage the LaunchAgent.
+    public var installAgent: Bool
+    public var uninstallAgent: Bool
+    /// `watch --print-agent-plist`: print the agent plist to stdout.
+    public var printAgentPlist: Bool
 
     public init(
         subcommand: Subcommand? = nil,
@@ -44,7 +57,14 @@ public struct Invocation: Sendable, Equatable {
         skipPlist: Bool = false,
         noResign: Bool = false,
         json: Bool = false,
-        dryRun: Bool = false
+        dryRun: Bool = false,
+        mode: HideMode = .auto,
+        injectorPath: String? = nil,
+        interval: TimeInterval = 15,
+        iterations: Int = 0,
+        installAgent: Bool = false,
+        uninstallAgent: Bool = false,
+        printAgentPlist: Bool = false
     ) {
         self.subcommand = subcommand
         self.showHelp = showHelp
@@ -56,6 +76,13 @@ public struct Invocation: Sendable, Equatable {
         self.noResign = noResign
         self.json = json
         self.dryRun = dryRun
+        self.mode = mode
+        self.injectorPath = injectorPath
+        self.interval = interval
+        self.iterations = iterations
+        self.installAgent = installAgent
+        self.uninstallAgent = uninstallAgent
+        self.printAgentPlist = printAgentPlist
     }
 }
 
@@ -82,18 +109,28 @@ public enum CLI: Sendable {
           status    Report Dock presence, LSUIElement, `player state` (exit 0 only
                     when headless + running + scriptable)
           hide      Set LSUIElement=true, re-sign ad-hoc, relaunch headless
-                    (activates:false), verify `player state` within --timeout
+                    (activates:false), verify `player state` within --timeout.
+                    --mode injector (or auto fallback) uses the accessory-policy
+                    dylib when the Dock icon survives.
           restore   Restore the Info.plist backup (original Apple signature
                     returns), relaunch normally
           watch     Persistence daemon: re-apply hiding when Spotify updates or
-                    the Dock icon returns (task 3)
+                    the Dock icon returns; --install-agent wires the LaunchAgent
 
         OPTIONS:
           --spotify-app <path>  Path to Spotify.app (default: \(defaultSpotifyAppPath))
           --timeout <seconds>   AppleScript wait after relaunch (default: 10)
+          --mode <auto|plist|injector>
+                                Hiding strategy for `hide` (default: auto)
+          --injector <path>     Injector dylib path (default: install dir)
           --skip-relaunch       Edit plist only, do not relaunch (for install.sh)
           --skip-plist          Relaunch + verify only, do not edit plist
           --no-resign           Skip ad-hoc re-sign (relaunch may fail)
+          --interval <seconds>  `watch` pass interval (default: 15)
+          --iterations <n>      `watch` passes then exit, 0 = forever (default: 0)
+          --install-agent       Install + bootstrap the watcher LaunchAgent
+          --uninstall-agent     Bootout + remove the watcher LaunchAgent
+          --print-agent-plist   Print the LaunchAgent plist to stdout
           --json                Machine-readable `status` output
           --dry-run             Print the plan without changing anything
           -h, --help            Show this help
@@ -127,8 +164,39 @@ public enum CLI: Sendable {
                 }
                 invocation.timeout = seconds
                 i += 1
+            case "--mode":
+                guard i + 1 < args.count else { return .failure(.missingValue(arg)) }
+                guard let mode = HideMode(rawValue: args[i + 1]) else {
+                    return .failure(.invalidValue(flag: arg, value: args[i + 1]))
+                }
+                invocation.mode = mode
+                i += 1
+            case "--injector":
+                guard i + 1 < args.count else { return .failure(.missingValue(arg)) }
+                invocation.injectorPath = args[i + 1]
+                i += 1
+            case "--interval":
+                guard i + 1 < args.count else { return .failure(.missingValue(arg)) }
+                guard let seconds = TimeInterval(args[i + 1]), seconds > 0 else {
+                    return .failure(.invalidValue(flag: arg, value: args[i + 1]))
+                }
+                invocation.interval = seconds
+                i += 1
+            case "--iterations":
+                guard i + 1 < args.count else { return .failure(.missingValue(arg)) }
+                guard let n = Int(args[i + 1]), n >= 0 else {
+                    return .failure(.invalidValue(flag: arg, value: args[i + 1]))
+                }
+                invocation.iterations = n
+                i += 1
             case "--skip-relaunch":
                 invocation.skipRelaunch = true
+            case "--install-agent":
+                invocation.installAgent = true
+            case "--uninstall-agent":
+                invocation.uninstallAgent = true
+            case "--print-agent-plist":
+                invocation.printAgentPlist = true
             case "--skip-plist":
                 invocation.skipPlist = true
             case "--no-resign":
@@ -140,12 +208,32 @@ public enum CLI: Sendable {
             default:
                 if arg.hasPrefix("--spotify-app=") {
                     invocation.spotifyAppPath = String(arg.dropFirst("--spotify-app=".count))
+                } else if arg.hasPrefix("--mode=") {
+                    let value = String(arg.dropFirst("--mode=".count))
+                    guard let mode = HideMode(rawValue: value) else {
+                        return .failure(.invalidValue(flag: "--mode", value: value))
+                    }
+                    invocation.mode = mode
+                } else if arg.hasPrefix("--injector=") {
+                    invocation.injectorPath = String(arg.dropFirst("--injector=".count))
                 } else if arg.hasPrefix("--timeout=") {
                     let value = String(arg.dropFirst("--timeout=".count))
                     guard let seconds = TimeInterval(value), seconds > 0 else {
                         return .failure(.invalidValue(flag: "--timeout", value: value))
                     }
                     invocation.timeout = seconds
+                } else if arg.hasPrefix("--interval=") {
+                    let value = String(arg.dropFirst("--interval=".count))
+                    guard let seconds = TimeInterval(value), seconds > 0 else {
+                        return .failure(.invalidValue(flag: "--interval", value: value))
+                    }
+                    invocation.interval = seconds
+                } else if arg.hasPrefix("--iterations=") {
+                    let value = String(arg.dropFirst("--iterations=".count))
+                    guard let n = Int(value), n >= 0 else {
+                        return .failure(.invalidValue(flag: "--iterations", value: value))
+                    }
+                    invocation.iterations = n
                 } else if arg.hasPrefix("-") {
                     return .failure(.unknownSubcommand(arg))
                 } else if let sub = Subcommand(rawValue: arg) {

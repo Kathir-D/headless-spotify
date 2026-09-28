@@ -29,8 +29,7 @@ public enum Runner {
         case .restore:
             return await restore(invocation, output: output, errorOutput: errorOutput)
         case .watch:
-            output("watch: persistence daemon lands in task 3 (injector fallback + LaunchAgent watcher).")
-            return 0
+            return await watch(invocation, output: output, errorOutput: errorOutput)
         case .none:
             output(CLI.helpText)
             return 0
@@ -142,7 +141,7 @@ public enum Runner {
         if inv.skipRelaunch {
             lines.append("  - skip relaunch (--skip-relaunch)")
         } else {
-            lines.append("  - quit Spotify if running, relaunch headless (activates:false)")
+            lines.append("  - quit Spotify if running, relaunch headless (activates:false, mode: \(inv.mode.rawValue))")
             lines.append("  - poll `player state` up to \(Int(inv.timeout))s, verify Dock hidden")
         }
         lines.append("  - writable: \(writable ? "yes" : "no — run `sudo ./install.sh`")")
@@ -191,22 +190,204 @@ public enum Runner {
                 output("hide: quitting Spotify…")
                 _ = await SpotifyState.terminate()
             }
-            do {
-                _ = try await SpotifyState.launchHeadless(appPath: inv.spotifyAppPath)
-            } catch {
-                errorOutput("hide: relaunch failed: \(error)")
-                return 1
+            switch inv.mode {
+            case .plist:
+                return await relaunchAndVerify(inv, output: output, errorOutput: errorOutput, useInjector: nil)
+            case .injector:
+                guard let dylib = Injector.locate(explicit: inv.injectorPath) else {
+                    errorOutput("hide: injector dylib not found — pass --injector <path> or install it (sudo ./install.sh)")
+                    return 1
+                }
+                warnIfHardened(appPath: inv.spotifyAppPath, output: output)
+                return await relaunchAndVerify(inv, output: output, errorOutput: errorOutput, useInjector: dylib)
+            case .auto:
+                let code = await relaunchAndVerify(inv, output: output, errorOutput: errorOutput, useInjector: nil)
+                if code == 0 { return 0 }
+                // Plist mode verified but Dock survived (or verify failed) → fallback.
+                guard let dylib = Injector.locate(explicit: inv.injectorPath) else {
+                    errorOutput("hide: plist mode did not hide the Dock and no injector dylib is installed.")
+                    return code
+                }
+                output("hide: plist mode insufficient — falling back to injector (\(dylib))…")
+                warnIfHardened(appPath: inv.spotifyAppPath, output: output)
+                _ = await SpotifyState.terminate()
+                return await relaunchAndVerify(inv, output: output, errorOutput: errorOutput, useInjector: dylib)
             }
-            output("hide: waiting for AppleScript (≤\(Int(inv.timeout))s)…")
-            guard let state = SpotifyScripting.waitForScripting(timeout: inv.timeout) else {
-                errorOutput("hide: Spotify did not answer AppleScript within \(Int(inv.timeout))s")
-                return 1
-            }
-            let presence = await SpotifyState.dockPresence()
-            output("hide: ready — player state: \(state), Dock: \(presence.rawValue)")
-            return presence == .hidden ? 0 : 1
         }
         output("hide: plist updated (relaunch skipped)")
+        return 0
+    }
+
+    static func warnIfHardened(appPath: String, output: @Sendable (String) -> Void) {
+        if Injector.isHardenedRuntime(appPath: appPath) {
+            output("hide: note — Spotify is hardened-runtime, which strips DYLD_* vars; the injector is likely ignored and plist mode stays primary.")
+        }
+    }
+
+    /// Relaunch (plain or injector) then poll AppleScript + Dock state.
+    /// Returns 0 only when the Dock is hidden and Spotify answers scripting.
+    static func relaunchAndVerify(
+        _ inv: Invocation,
+        output: @Sendable (String) -> Void,
+        errorOutput: @Sendable (String) -> Void,
+        useInjector dylib: String?
+    ) async -> Int32 {
+        do {
+            if let dylib {
+                _ = try await SpotifyState.launchWithInjector(appPath: inv.spotifyAppPath, dylibPath: dylib)
+            } else {
+                _ = try await SpotifyState.launchHeadless(appPath: inv.spotifyAppPath)
+            }
+        } catch {
+            errorOutput("hide: relaunch failed: \(error)")
+            return 1
+        }
+        output("hide: waiting for AppleScript (≤\(Int(inv.timeout))s)…")
+        guard let state = SpotifyScripting.waitForScripting(timeout: inv.timeout) else {
+            errorOutput("hide: Spotify did not answer AppleScript within \(Int(inv.timeout))s")
+            return 1
+        }
+        let presence = await SpotifyState.dockPresence()
+        output("hide: ready — player state: \(state), Dock: \(presence.rawValue)")
+        return presence == .hidden ? 0 : 1
+    }
+
+    // MARK: - watch (persistence daemon)
+
+    static func watch(
+        _ inv: Invocation,
+        output: @Sendable (String) -> Void,
+        errorOutput: @Sendable (String) -> Void
+    ) async -> Int32 {
+        if inv.printAgentPlist {
+            let binary = CommandLine.arguments.first ?? "/usr/local/bin/headless-spotify"
+            output(AgentPlist.contents(binaryPath: binary, spotifyAppPath: inv.spotifyAppPath, interval: inv.interval))
+            return 0
+        }
+        if inv.installAgent {
+            return installAgent(inv, output: output, errorOutput: errorOutput)
+        }
+        if inv.uninstallAgent {
+            return uninstallAgent(output: output, errorOutput: errorOutput)
+        }
+        if inv.dryRun {
+            output("watch plan for \(inv.spotifyAppPath): every \(Int(inv.interval))s check Dock + LSUIElement + app version; re-apply hiding on drift.")
+            return 0
+        }
+        let plist = SpotifyPlist(appPath: inv.spotifyAppPath)
+        guard plist.appExists else {
+            errorOutput("watch: Spotify not found at \(inv.spotifyAppPath)")
+            return 2
+        }
+        output("watch: guarding \(inv.spotifyAppPath) every \(Int(inv.interval))s (Ctrl-C / SIGTERM to stop)")
+        var lastVersion = plist.appVersion()
+        var plistFailures = 0
+        var pass = 0
+        while true {
+            pass += 1
+            let report = await collectStatus(appPath: inv.spotifyAppPath)
+            let currentVersion = plist.appVersion()
+            let action = Watcher.decide(
+                report: report,
+                lastSeenVersion: lastVersion,
+                currentVersion: currentVersion,
+                plistFailures: plistFailures
+            )
+            switch action {
+            case .none:
+                plistFailures = 0
+            case .relaunchHeadless(let reason):
+                output("watch: \(reason) — re-applying…")
+                let code = await reapply(
+                    Invocation(subcommand: .hide, spotifyAppPath: inv.spotifyAppPath, timeout: inv.timeout, mode: .auto),
+                    output: output,
+                    errorOutput: errorOutput
+                )
+                plistFailures = code == 0 ? 0 : plistFailures + 1
+            case .reapplyPlist(let reason):
+                output("watch: \(reason) — re-applying…")
+                let code = await reapply(
+                    Invocation(subcommand: .hide, spotifyAppPath: inv.spotifyAppPath, timeout: inv.timeout, mode: .auto),
+                    output: output,
+                    errorOutput: errorOutput
+                )
+                plistFailures = code == 0 ? 0 : plistFailures
+            case .injectorFallback(let reason):
+                output("watch: \(reason) — trying injector…")
+                _ = await reapply(
+                    Invocation(subcommand: .hide, spotifyAppPath: inv.spotifyAppPath, timeout: inv.timeout, mode: .injector),
+                    output: output,
+                    errorOutput: errorOutput
+                )
+                plistFailures = 0
+            }
+            lastVersion = currentVersion
+            if inv.iterations > 0, pass >= inv.iterations {
+                return 0
+            }
+            try? await Task.sleep(nanoseconds: UInt64(inv.interval * 1_000_000_000))
+        }
+    }
+
+    /// hide without the pre-quit duplication: shared by hide/watch.
+    static func reapply(
+        _ inv: Invocation,
+        output: @Sendable (String) -> Void,
+        errorOutput: @Sendable (String) -> Void
+    ) async -> Int32 {
+        await hide(inv, output: output, errorOutput: errorOutput)
+    }
+
+    // MARK: - LaunchAgent management (persistence across login/updates)
+
+    static func installAgent(
+        _ inv: Invocation,
+        output: @Sendable (String) -> Void,
+        errorOutput: @Sendable (String) -> Void
+    ) -> Int32 {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let dest = AgentPlist.agentPlistPath(homeDirectory: home)
+        let binary = CommandLine.arguments.first ?? "/usr/local/bin/headless-spotify"
+        let contents = AgentPlist.contents(binaryPath: binary, spotifyAppPath: inv.spotifyAppPath, interval: inv.interval)
+        do {
+            try FileManager.default.createDirectory(
+                atPath: URL(fileURLWithPath: dest).deletingLastPathComponent().path,
+                withIntermediateDirectories: true
+            )
+            try contents.write(toFile: dest, atomically: true, encoding: .utf8)
+        } catch {
+            errorOutput("watch: writing agent plist failed: \(error)")
+            return 1
+        }
+        let domain = "gui/\(getuid())"
+        let boot = ProcessRunner.run("/bin/launchctl", ["bootout", domain, dest])
+        _ = boot // ignore: not loaded yet is fine
+        let load = ProcessRunner.run("/bin/launchctl", ["bootstrap", domain, dest])
+        if load.exitCode != 0 {
+            errorOutput("watch: bootstrap failed: \(load.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+            return 1
+        }
+        output("watch: agent installed + loaded: \(dest)")
+        return 0
+    }
+
+    static func uninstallAgent(
+        output: @Sendable (String) -> Void,
+        errorOutput: @Sendable (String) -> Void
+    ) -> Int32 {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let dest = AgentPlist.agentPlistPath(homeDirectory: home)
+        let domain = "gui/\(getuid())"
+        _ = ProcessRunner.run("/bin/launchctl", ["bootout", domain, dest])
+        if FileManager.default.fileExists(atPath: dest) {
+            do {
+                try FileManager.default.removeItem(atPath: dest)
+            } catch {
+                errorOutput("watch: removing agent plist failed: \(error)")
+                return 1
+            }
+        }
+        output("watch: agent removed: \(dest)")
         return 0
     }
 

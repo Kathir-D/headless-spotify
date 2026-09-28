@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- MIT License — Copyright (c) 2026 headless-spotify Contributors (see LICENSE).
-     LaunchAgent stub (task 1). Task 3 wires this to the injector/watcher so
-     Spotify stays headless across restarts and self-updates. -->
+     Reference copy. The CLI generates the installed file
+     (`headless-spotify watch --print-agent-plist`); install.sh installs that
+     output, so this file and AgentPlist.contents must stay in sync. -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -10,11 +11,25 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/bin/headless-spotify</string>
-        <string>hide</string>
+        <string>watch</string>
+        <string>--interval</string>
+        <string>15</string>
+        <string>--spotify-app</string>
+        <string>/Applications/Spotify.app</string>
     </array>
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
     <key>KeepAlive</key>
-    <false/>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>WatchPaths</key>
+    <array>
+        <string>/Applications/Spotify.app/Contents/Info.plist</string>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/tmp/headless-spotify-watcher.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/headless-spotify-watcher.log</string>
 </dict>
 </plist>

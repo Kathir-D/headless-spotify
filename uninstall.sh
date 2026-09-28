@@ -47,11 +47,16 @@ for AGENTS_DIR in "$HOME/Library/LaunchAgents" /Library/LaunchAgents; do
   fi
 done
 
-# 3. Remove CLI binary.
+# 3. Remove CLI binary + injector dylib.
 if [ -f "$BIN" ] && [ -w "$(dirname "$BIN")" ]; then
   rm -f "$BIN" && echo "removed $BIN"
 elif [ -f "$BIN" ]; then
   echo "keeping $BIN (not writable — remove with: sudo rm $BIN)"
+fi
+if [ -d /usr/local/lib/headless-spotify ] && [ -w /usr/local/lib/headless-spotify ]; then
+  rm -rf /usr/local/lib/headless-spotify && echo "removed /usr/local/lib/headless-spotify"
+elif [ -d /usr/local/lib/headless-spotify ]; then
+  echo "keeping /usr/local/lib/headless-spotify (not writable — remove with sudo)"
 fi
 
 echo "done: Spotify Dock icon restored."
