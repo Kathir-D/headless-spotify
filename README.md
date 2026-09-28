@@ -71,6 +71,11 @@ headless-spotify restore           # original plist (+ Apple signature) back, re
 headless-spotify watch --interval 15            # persistence daemon
 headless-spotify watch --install-agent          # install + load LaunchAgent now
 headless-spotify watch --print-agent-plist      # show the agent definition
+
+# Media passthrough (same AppleScript Sonar uses; never launches Spotify)
+headless-spotify control play | pause | toggle | next | previous
+headless-spotify control volume                 # print 0–100
+headless-spotify control set-volume 70          # note: Spotify ≥1.3.x ignores sets
 ```
 
 ## Uninstall
@@ -116,6 +121,7 @@ reports not-headless, `restore` returns to normal).
 | `restore` warns signature invalid | Seal files diverge (e.g. manual edits after backup) | Reinstall Spotify from spotify.com, then `hide` again |
 | First `status`/`hide` prompts for automation access | macOS asks once before `osascript` may control Spotify | Allow it; afterwards everything is non-interactive |
 | Injector seemingly does nothing | Hardened Spotify strips `DYLD_*` | Expected — plist mode is primary; see “Known limit” above |
+| `control set-volume` reports the old volume | Spotify ≥1.3.x ignores AppleScript volume sets (verified live 2026-09-28) | Use media keys / the volume slider; Sonar's volume control hits the same Spotify-side wall — `play/pause/next/previous` all work |
 | Watcher log | `/tmp/headless-spotify-watcher.log` | `headless-spotify status` tells current state |
 
 Permissions note: no Accessibility permission is needed. The only prompt is
