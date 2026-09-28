@@ -1,62 +1,77 @@
 # headless-spotify
 
-Run official Spotify on macOS with no Dock icon and no Cmd-Tab entry. Windows still work. AppleScript still works, so Sonar controls it identically to normal Spotify.
+[![CI](https://github.com/Kathir-D/headless-spotify/actions/workflows/ci.yml/badge.svg)](https://github.com/Kathir-D/headless-spotify/actions)
+[![macOS](https://img.shields.io/badge/macOS-15%2B-lightgrey)](#requirements)
+[![version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/Kathir-D/headless-spotify/releases)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-No Premium, no API key, no Soloist/librespot. Soloist is Linux-only + needs a Premium API key; librespot is Premium-only — both rejected for this macOS goal.
+Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — windows still work, AppleScript still works, so [Sonar](https://github.com/Kathir-D/sonar) controls it identically to normal Spotify. No Premium, no API key, no Soloist/librespot.
 
-## How it works
+## Table of Contents
 
-Two hiding methods, tried in order (`hide --mode auto`, the default):
+- [Features](#features)
+- [Current status](#current-status)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Usage](#usage)
+- [How it works](#how-it-works)
+- [Sonar compatibility](#sonar-compatibility)
+- [Troubleshooting](#troubleshooting)
+- [Uninstall](#uninstall)
+- [Developing](#developing)
+- [Credits & provenance](#credits--provenance)
+- [Contributing](#contributing)
+- [License](#license)
 
-1. **LSUIElement mode (primary).** Sets `LSUIElement=true` in
-   `/Applications/Spotify.app/Contents/Info.plist`, ad-hoc re-signs (Apple
-   Silicon refuses to relaunch an edited bundle otherwise), then relaunches
-   Spotify headless (`NSWorkspace.openApplication(activates:false)`) and polls
-   `player state` for up to 10 s. Concept credit:
-   [4ian/hide-spotify-from-dock](https://github.com/4ian/hide-spotify-from-dock) (MIT).
-   > ⛔ **Blocked on Spotify ≥1.3.1 (verified 2026-09-28, macOS 26):** with
-   > `LSUIElement=true` present (ad-hoc seal, `codesign --verify` clean),
-   > Spotify 1.3.1.234 exits silently on launch — plain `open -a Spotify`
-   > fails too; removing the key restores launching. So on current Spotify the
-   > plist path cannot produce a running app, and `hide` exits 1 with a
-   > pointer to `restore`. If Spotify ever honors LSUIElement again, no code
-   > changes are needed — only this notice.
-2. **Injector fallback.** If the Dock icon survives plist mode, Spotify is
-   relaunched with `DYLD_INSERT_LIBRARIES` pointing at
-   `libHeadlessSpotifyInjector.dylib`, whose constructor forces
-   `setActivationPolicy: → Accessory`. Concept credit:
-   [michaelmitchell-bit/hide-macos-app-dock-icon](https://github.com/michaelmitchell-bit/hide-macos-app-dock-icon) (MIT).
-   The mechanism is verified working (test fixture flips prohibited→accessory,
-   bundle-ID gate holds).
-   **Known limit:** hardened-runtime binaries (current official Spotify.app)
-   strip `DYLD_*` variables at exec, so the injector is ignored there and plist
-   mode stays primary. The dylib is bundle-ID gated to `com.spotify.client`,
-   so it can never alter your other apps.
+## Features
 
-A **watcher daemon** (`headless-spotify watch`, kept alive by a LaunchAgent)
-re-applies hiding when Spotify self-updates (updates wipe `Info.plist`) or the
-Dock icon returns: stale launch → relaunch headless; wiped plist → redo
-plist + re-sign + relaunch; Dock survives plist mode → injector.
+- **Hides Spotify from the Dock and Cmd-Tab**, keeps windows and playback working.
+- **Keeps the Spotify contract intact**: process stays `com.spotify.client`, scripting dictionary untouched — Sonar matches by bundleID + `player state` only.
+- **Two hiding methods with automatic fallback** (`hide --mode auto`, the default): `LSUIElement` plist mode first, accessory-policy injector second.
+- **Watcher daemon** (LaunchAgent) re-applies hiding when Spotify self-updates or the Dock icon returns.
+- **Media passthrough** (`control play|pause|toggle|next|previous|volume|…`) using the same AppleScript Sonar uses — never launches Spotify as a side effect.
+- **Safe by design**: `install.sh` backs up `Info.plist` (+ the code-seal file); `restore`/`uninstall.sh` bring back the original Apple signature. `sudo` is needed only for install.
+- **Zero dependencies**: Swift standard library + Foundation/AppKit only. No API keys, no certs, nothing to configure.
 
-The Spotify contract never changes: the process stays `com.spotify.client`
-and the scripting dictionary stays intact. Sonar matches by bundleID +
-`player state` only — never by Dock or window presence.
+## Current status
+
+> ⛔ **Blocked on Spotify ≥1.3.1 (verified 2026-09-28, macOS 26):** with
+> `LSUIElement=true` present (ad-hoc seal, `codesign --verify` clean),
+> Spotify 1.3.1.234 exits silently on launch — plain `open -a Spotify`
+> fails too; removing the key restores launching. So on current Spotify the
+> plist path cannot produce a running app, and `hide` exits 1 with a
+> pointer to `restore`. If Spotify ever honors LSUIElement again, no code
+> changes are needed — only this notice.
+
+The injector fallback is likewise inert against current official Spotify: its
+hardened runtime strips `DYLD_*` variables at exec, so the dylib is ignored
+(plist mode stays primary). Everything is implemented and verified where
+verifiable (test fixture flips prohibited→accessory, bundle-ID gate holds);
+the CLI enforces the situation honestly — `hide` exits 1, `status` reports
+not-headless, `restore` returns to normal.
+
+## Requirements
+
+- macOS 15+ (Sequoia or later).
+- Official Spotify.app (Free tier works) at `/Applications/Spotify.app` (or pass `--spotify-app`).
+- Xcode Command Line Tools (`swift`) — enough to build, install, and use.
+- Full Xcode — only needed to run `swift test` (see [Developing](#developing)).
 
 ## Install
 
 ```sh
-git clone <this-repo> && cd headless-spotify
+git clone https://github.com/Kathir-D/headless-spotify.git && cd headless-spotify
 sudo ./install.sh /Applications/Spotify.app
 ```
 
-What it does: builds the release CLI + dylib, installs them to
-`/usr/local/bin` and `/usr/local/lib/headless-spotify/`, backs up
-`Info.plist` (+ the code-seal file), sets `LSUIElement=true`, ad-hoc
-re-signs, relaunches Spotify headless as you, verifies `player state`, and
-loads the watcher LaunchAgent. `sudo` is needed only here (bundle edit +
-system paths) — the CLI itself never needs root.
+What it does:
 
-No Xcode project required — just the Xcode Command Line Tools (`swift`).
+1. Builds the release CLI + dylib (or reuses a prebuilt `bin/`), installs them to `/usr/local/bin` and `/usr/local/lib/headless-spotify/`.
+2. Backs up `Info.plist` (+ the code-seal file), sets `LSUIElement=true`, ad-hoc re-signs (credit: [4ian/hide-spotify-from-dock](https://github.com/4ian/hide-spotify-from-dock)).
+3. Relaunches Spotify headless **as you** (`NSWorkspace.openApplication(activates:false)`) and polls `player state` for up to 10 s.
+4. Loads the watcher LaunchAgent so hiding survives updates + restarts.
+
+`sudo` is needed only here (bundle edit + system paths) — the CLI itself never needs root.
 
 ## Usage
 
@@ -78,26 +93,52 @@ headless-spotify control volume                 # print 0–100
 headless-spotify control set-volume 70          # note: Spotify ≥1.3.x ignores sets
 ```
 
-## Uninstall
+Example session (headless state):
 
 ```sh
-./uninstall.sh /Applications/Spotify.app   # sudo only if the bundle is root-owned
+$ headless-spotify status
+Spotify: /Applications/Spotify.app (com.spotify.client)
+Installed: yes
+LSUIElement: true (headless)
+Dock: hidden (accessory)
+Player state: paused
+Backup: present
+Headless: yes — scriptable: yes
 ```
 
-Restores the original `Info.plist` + seal (Apple's signature verifies again),
-relaunches Spotify normally, unloads/removes the agent, removes the CLI +
-dylib. Your Dock icon comes back; nothing else changes.
-
-## Verify (works for normal + headless)
+Verify against either mode (normal or headless) with the same contract Sonar uses:
 
 ```applescript
 tell application "Spotify" to get player state
 --> playing / paused / stopped
 ```
 
-Match by `bundleID == com.spotify.client`, never by Dock/window.
+Match by `bundleID == com.spotify.client`, never by Dock or window presence.
 
-## Sonar compat matrix
+## How it works
+
+Two hiding methods, tried in order (`hide --mode auto`, the default):
+
+1. **LSUIElement mode (primary).** Sets `LSUIElement=true` in
+   `/Applications/Spotify.app/Contents/Info.plist`, ad-hoc re-signs (Apple
+   Silicon refuses to relaunch an edited bundle otherwise), then relaunches
+   Spotify headless and polls `player state` for up to 10 s. Concept credit:
+   [4ian/hide-spotify-from-dock](https://github.com/4ian/hide-spotify-from-dock) (MIT).
+2. **Injector fallback.** If the Dock icon survives plist mode, Spotify is
+   relaunched with `DYLD_INSERT_LIBRARIES` pointing at
+   `libHeadlessSpotifyInjector.dylib`, whose constructor forces
+   `setActivationPolicy: → Accessory`. Concept credit:
+   [michaelmitchell-bit/hide-macos-app-dock-icon](https://github.com/michaelmitchell-bit/hide-macos-app-dock-icon) (MIT).
+   The dylib is bundle-ID gated to `com.spotify.client`, so it can never
+   alter your other apps. See [Current status](#current-status) for why it is
+   inert against today's hardened Spotify build.
+
+A **watcher daemon** (`headless-spotify watch`, kept alive by a LaunchAgent)
+re-applies hiding when Spotify self-updates (updates wipe `Info.plist`) or the
+Dock icon returns: stale launch → relaunch headless; wiped plist → redo
+plist + re-sign + relaunch; Dock survives plist mode → injector.
+
+## Sonar compatibility
 
 | Spotify mode | Sonar sees it | Control |
 |---|---|---|
@@ -120,7 +161,7 @@ reports not-headless, `restore` returns to normal).
 | Spotify won't launch after `hide` | Edited bundle, re-sign failed | Re-run `hide` (look for the re-sign error), or `restore` + reinstall Spotify |
 | `restore` warns signature invalid | Seal files diverge (e.g. manual edits after backup) | Reinstall Spotify from spotify.com, then `hide` again |
 | First `status`/`hide` prompts for automation access | macOS asks once before `osascript` may control Spotify | Allow it; afterwards everything is non-interactive |
-| Injector seemingly does nothing | Hardened Spotify strips `DYLD_*` | Expected — plist mode is primary; see “Known limit” above |
+| Injector seemingly does nothing | Hardened Spotify strips `DYLD_*` | Expected — plist mode is primary; see [Current status](#current-status) |
 | `control set-volume` reports the old volume | Spotify ≥1.3.x ignores AppleScript volume sets (verified live 2026-09-28) | Use media keys / the volume slider; Sonar's volume control hits the same Spotify-side wall — `play/pause/next/previous` all work |
 | Watcher log | `/tmp/headless-spotify-watcher.log` | `headless-spotify status` tells current state |
 
@@ -128,7 +169,31 @@ Permissions note: no Accessibility permission is needed. The only prompt is
 the one-time AppleEvents authorization for controlling Spotify, which Sonar
 users have already granted.
 
-## Credits & Provenance
+## Uninstall
+
+```sh
+./uninstall.sh /Applications/Spotify.app   # sudo only if the bundle is root-owned
+```
+
+Restores the original `Info.plist` + seal (Apple's signature verifies again),
+relaunches Spotify normally, unloads/removes the agent, removes the CLI +
+dylib. Your Dock icon comes back; nothing else changes.
+
+## Developing
+
+```sh
+swift build          # CLI + injector dylib (Xcode Command Line Tools are enough)
+swift test           # 52 tests, all offline-safe (fixtures, stubbed runners; needs full Xcode)
+./scripts/smoke-test.sh            # pre-release gate (pass --live to exercise real media controls)
+./scripts/package-release.sh       # versioned tarball + SHA256SUMS.txt (see VERSION)
+```
+
+Layout: `Sources/HeadlessSpotify/*` (CLI), `Sources/CHeadlessInjector/*`
+(dylib), `Tests/HeadlessSpotifyTests/*`, `install.sh` / `uninstall.sh`,
+`launchagent/*.plist`, `Formula/headless-spotify.rb`,
+`scripts/package-release.sh` + `scripts/smoke-test.sh`.
+
+## Credits & provenance
 
 | What | Source | Author | License | How used |
 |---|---|---|---|---|
@@ -138,13 +203,11 @@ users have already granted.
 
 Full texts: see `THIRD-PARTY-NOTICES.md` + `LICENSE`.
 
-## Developing
+## Contributing
 
-```sh
-swift build          # CLI + injector dylib (Xcode Command Line Tools are enough)
-swift test           # 52 tests, all offline-safe (fixtures, stubbed runners; needs full Xcode)
-./scripts/package-release.sh   # versioned tarball + SHA256SUMS.txt (see VERSION)
-```
+Issues and small PRs welcome. Conventional commits (`feat:`, `fix:`, `docs:`,
+`test:`, `chore:`), `git status` before committing. Before opening a PR,
+run `swift build`, `swift test` (full Xcode), and `./scripts/smoke-test.sh`.
 
 ## License
 
