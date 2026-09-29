@@ -14,6 +14,16 @@ SPOTIFY_APP="${1:-/Applications/Spotify.app}"
 BIN="${BIN:-/usr/local/bin/headless-spotify}"
 LABEL="com.headless-spotify.watcher"
 
+# install.sh reuses a headless-spotify that is already on PATH rather than
+# installing a second copy (that is the Homebrew cask layout, where
+# $(brew --prefix)/bin is /usr/local/bin on Intel). Resolve it the same way, so
+# `restore` below finds the same binary install.sh used.
+if [ ! -x "$BIN" ]; then
+  if PATH_BIN="$(command -v headless-spotify 2>/dev/null || true)" && [ -n "$PATH_BIN" ]; then
+    BIN="$PATH_BIN"
+  fi
+fi
+
 need_root() { [ ! -w "$SPOTIFY_APP/Contents/Info.plist" ] && [ "$(id -u)" -ne 0 ]; }
 
 # Relaunching Spotify as root would start it in root's session, not yours.
@@ -84,7 +94,14 @@ if [ -d "$MENUBAR_APP" ]; then
 fi
 
 # 5. Remove CLI binary + injector dylib.
-if [ -f "$BIN" ] && [ -w "$(dirname "$BIN")" ]; then
+#
+#    A symlink is left alone. That is what a Homebrew cask installs into
+#    $(brew --prefix)/bin, and removing it by hand would leave the cask
+#    believing its binary is still there while `brew upgrade` no longer
+#    refreshes it. `brew uninstall --cask` owns that link.
+if [ -L "$BIN" ]; then
+  echo "leaving $BIN — it is a Homebrew link; remove it with: brew uninstall --cask headless-spotify"
+elif [ -f "$BIN" ] && [ -w "$(dirname "$BIN")" ]; then
   rm -f "$BIN" && echo "removed $BIN"
 elif [ -f "$BIN" ]; then
   echo "keeping $BIN (not writable — remove with: sudo rm $BIN)"

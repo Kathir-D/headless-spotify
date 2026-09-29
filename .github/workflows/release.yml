@@ -21,37 +21,38 @@ jobs:
           files: |
             dist/headless-spotify-*-macos.tar.gz
             dist/SHA256SUMS.txt
-      - name: Bump formula to this release
+      - name: Bump the cask to this release
         run: |
           VERSION="$(tr -d ' \t\r\n' < VERSION)"
           SHA="$(cut -d' ' -f1 < dist/SHA256SUMS.txt)"
-          URL="https://github.com/Kathir-D/headless-spotify/releases/download/v$VERSION/headless-spotify-$VERSION-macos.tar.gz"
-          python3 - "$SHA" "$URL" <<'EOF'
+          # The cask's `url` interpolates #{version}, so only the two lines
+          # below need to move; the URL follows on its own.
+          python3 - "$VERSION" "$SHA" <<'EOF'
           import re, sys
-          sha, url = sys.argv[1], sys.argv[2]
-          p = "Formula/headless-spotify.rb"
+          version, sha = sys.argv[1], sys.argv[2]
+          p = "Casks/headless-spotify.rb"
           s = open(p).read()
-          s = re.sub(r'url ".*"', f'url "{url}"', s)
-          s = re.sub(r'sha256 ".*"', f'sha256 "{sha}"', s)
+          s = re.sub(r'^  version ".*"$', f'  version "{version}"', s, count=1, flags=re.M)
+          s = re.sub(r'^  sha256 ".*"$',  f'  sha256 "{sha}"',  s, count=1, flags=re.M)
           open(p, "w").write(s)
           EOF
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/headless-spotify.rb
+          git add Casks/headless-spotify.rb
           # A re-run for the same tag has nothing new to commit.
           if git diff --cached --quiet; then
-            echo "Formula already points at v$VERSION."
+            echo "Cask already points at v$VERSION."
             exit 0
           fi
-          git commit -m "chore: bump formula to v$VERSION"
+          git commit -m "chore: bump cask to v$VERSION"
           # A tag-triggered checkout is a detached HEAD, so `git push` alone
           # fails with "You are not currently on a branch". Push the bump to
           # the default branch explicitly.
           git push origin "HEAD:${{ github.event.repository.default_branch }}"
-      # `brew install kathir-d/tap/headless-spotify` reads the formula from the
-      # tap, not from this repo. TAP_DEPLOY_KEY is a deploy key with write
+      # `brew install --cask kathir-d/tap/headless-spotify` reads the cask from
+      # the tap, not from this repo. TAP_DEPLOY_KEY is a deploy key with write
       # access to Kathir-D/homebrew-tap and nothing else.
-      - name: Publish formula to the Homebrew tap
+      - name: Publish the cask to the Homebrew tap
         env:
           TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
         run: |
@@ -63,16 +64,26 @@ jobs:
           printf '%s\n' "$TAP_DEPLOY_KEY" > "$KEY" && chmod 600 "$KEY"
           export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
           git clone --depth 1 git@github.com:Kathir-D/homebrew-tap.git "$RUNNER_TEMP/tap"
-          mkdir -p "$RUNNER_TEMP/tap/Formula"
-          cp Formula/headless-spotify.rb "$RUNNER_TEMP/tap/Formula/headless-spotify.rb"
+          mkdir -p "$RUNNER_TEMP/tap/Casks"
+          cp Casks/headless-spotify.rb "$RUNNER_TEMP/tap/Casks/headless-spotify.rb"
           cd "$RUNNER_TEMP/tap"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/headless-spotify.rb
+          git add Casks/headless-spotify.rb
+          # The formula is the old story and it is the one this change exists to
+          # kill: `app` is cask-only, so a formula could never put the menu bar
+          # bundle in /Applications, and leaving it in the tap would keep
+          # `brew install kathir-d/tap/headless-spotify` resolving to the
+          # install that shows the user nothing. Removing it here rather than by
+          # hand keeps the tap's one-writer-per-file rule intact.
+          if [ -f Formula/headless-spotify.rb ]; then
+            git rm -q Formula/headless-spotify.rb
+            rmdir Formula 2>/dev/null || true
+          fi
           # A re-run for the same tag has nothing new to commit.
           if git diff --cached --quiet; then
             echo "The tap already has headless-spotify ${GITHUB_REF_NAME}."
             exit 0
           fi
-          git commit -m "headless-spotify ${GITHUB_REF_NAME#v}"
+          git commit -m "headless-spotify ${GITHUB_REF_NAME#v}: ship it as a cask"
           git push origin HEAD

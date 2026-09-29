@@ -5,8 +5,22 @@
 # LSUIElement .app (no Dock icon, no Cmd-Tab entry).
 #
 # The app itself is deliberately tiny: an SF Symbol in the menu bar whose
-# menu shows the project name and a single Quit action. VERSION is copied
-# into Info.plist so the menu shows the same version as `headless-spotify`.
+# menu shows the project name, an Enable/Disable hiding toggle and Quit.
+# VERSION is copied into Info.plist so the menu shows the same version as
+# `headless-spotify`.
+#
+# The bundle also carries the privileged helpers (install.sh, uninstall.sh, the
+# injector dylib and the watcher LaunchAgent definition) in
+# Contents/Resources. That is what lets the Homebrew cask be just `app` +
+# `binary`: the cask moves this one bundle into /Applications, and a user who
+# has not run anything privileged yet still has the one command that does the
+# privileged work, at a path that does not change between versions:
+#
+#   sudo /Applications/headless-spotify.app/Contents/Resources/install.sh
+#
+# They must be copied BEFORE the ad-hoc signature below. Adding a file to an
+# already-signed bundle invalidates its seal and macOS then refuses to launch
+# it, so a "sign first, copy later" ordering ships a broken app.
 #
 # Output: dist/headless-spotify.app  (ad-hoc signed)
 #
@@ -14,6 +28,7 @@
 #   CONFIG=debug       build the debug binary (default: release)
 #   OUT_DIR=<dir>      output directory (default: dist)
 #   BUILD_DIR=<dir>    package an already-built binary (skips detection)
+#   DYLIB=<path>       injector dylib to embed (default: look next to the build)
 #   SKIP_BUILD=1       reuse existing build products
 set -eu
 
@@ -125,6 +140,49 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 /usr/bin/plutil -lint "$APP/Contents/Info.plist" >/dev/null
+
+# The privileged helpers, inside the bundle so the cask only has to move one
+# thing. install.sh finds the dylib at $SCRIPT_DIR/lib/…, which is where it
+# looks in a tarball too, so the two layouts agree.
+DYLIB="${DYLIB:-}"
+if [ -z "$DYLIB" ]; then
+  for candidate in \
+    "$BUILD_DIR/libHeadlessSpotifyInjector.dylib" \
+    "$SCRIPT_DIR/lib/libHeadlessSpotifyInjector.dylib" \
+    "$SCRIPT_DIR/.build/apple/Products/$PRODUCTS_CONFIG/libHeadlessSpotifyInjector.dylib" \
+    "$SCRIPT_DIR/.build/$CONFIG/libHeadlessSpotifyInjector.dylib"; do
+    if [ -f "$candidate" ]; then
+      DYLIB="$candidate"
+      break
+    fi
+  done
+fi
+mkdir -p "$APP/Contents/Resources/lib" "$APP/Contents/Resources/launchagent"
+if [ -n "$DYLIB" ]; then
+  cp "$DYLIB" "$APP/Contents/Resources/lib/"
+  chmod 0644 "$APP/Contents/Resources/lib/libHeadlessSpotifyInjector.dylib"
+  echo "dylib from $DYLIB"
+else
+  echo "warning: libHeadlessSpotifyInjector.dylib not found — the bundle ships without it" >&2
+  echo "warning: (build the whole package with scripts/package-release.sh to get one)" >&2
+fi
+for helper in install.sh uninstall.sh; do
+  if [ ! -f "$SCRIPT_DIR/$helper" ]; then
+    echo "error: $SCRIPT_DIR/$helper is missing — cannot ship a bundle without it" >&2
+    rm -rf "$APP"
+    exit 1
+  fi
+  cp "$SCRIPT_DIR/$helper" "$APP/Contents/Resources/$helper"
+  chmod +x "$APP/Contents/Resources/$helper"
+done
+if [ -f "$SCRIPT_DIR/launchagent/com.headless-spotify.watcher.plist" ]; then
+  cp "$SCRIPT_DIR/launchagent/com.headless-spotify.watcher.plist" \
+    "$APP/Contents/Resources/launchagent/"
+fi
+# Documentation, so the version a user is looking at explains itself.
+cp "$SCRIPT_DIR/LICENSE" "$APP/Contents/Resources/LICENSE"
+cp "$SCRIPT_DIR/VERSION" "$APP/Contents/Resources/VERSION"
+
 /usr/bin/codesign --force --sign - "$APP" >/dev/null 2>&1 \
   || echo "warning: ad-hoc signing failed (the app still runs locally)" >&2
 

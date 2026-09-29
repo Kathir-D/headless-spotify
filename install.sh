@@ -9,9 +9,15 @@
 #      (activates:false) and verify `player state` (<=10 s default).
 #   4. Install the injector dylib to /usr/local/lib/headless-spotify/.
 #   5. Install + launch the menu bar extra (/Applications/headless-spotify.app).
+#      Skipped when the app is already there — `brew install --cask` owns it.
 #   6. Generate + bootstrap the watcher LaunchAgent as the console user
 #      (skipped when hiding failed — a watcher with nothing to do would only
 #      quit and relaunch a healthy Spotify).
+#
+# Under Homebrew the cask has already done steps 4 and 5 by the time you get
+# here; what is left is the one thing that needs root — the bundle edit. Run it
+# from wherever it landed:
+#   sudo /Applications/headless-spotify.app/Contents/Resources/install.sh
 #
 # Usage: sudo ./install.sh [/Applications/Spotify.app]
 #   INSTALL_MENUBAR=0   skip step 5 (CLI only).
@@ -36,8 +42,9 @@ if [ ! -d "$SPOTIFY_APP" ]; then
 fi
 
 # 1. CLI binary: explicit HEADLESS_BIN wins, then a tarball-layout bin/ next
-#    to this script, then a Homebrew prefix bin/, then a source-tree release
-#    build, then build from source.
+#    to this script, then a Homebrew prefix bin/ beside share/headless-spotify,
+#    then a headless-spotify already on PATH, then a source-tree release build,
+#    then build from source.
 #    Multi-arch `swift build` products live in .build/apple/Products/Release
 #    (capitalised) while single-arch ones land in .build/<triple>/release.
 find_built() {
@@ -62,7 +69,7 @@ if [ -n "${HEADLESS_BIN:-}" ]; then
 elif [ -f "$SCRIPT_DIR/bin/headless-spotify" ]; then
   install -m 0755 "$SCRIPT_DIR/bin/headless-spotify" "$BIN"
   echo "installed $SCRIPT_DIR/bin/headless-spotify -> $BIN"
-elif [ -f "$SCRIPT_DIR/../bin/headless-spotify" ]; then
+elif [ -f "$SCRIPT_DIR/../bin/headless-spotify" ] || [ -f "$SCRIPT_DIR/../../bin/headless-spotify" ]; then
   # Homebrew layout: share/headless-spotify/install.sh next to <prefix>/bin.
   BREW_BIN="$(cd "$SCRIPT_DIR/../.." && pwd)/bin/headless-spotify"
   if [ -f "$BREW_BIN" ]; then
@@ -72,6 +79,14 @@ elif [ -f "$SCRIPT_DIR/../bin/headless-spotify" ]; then
     echo "error: expected $BREW_BIN next to this script, but it is missing." >&2
     exit 1
   fi
+elif PATH_BIN="$(command -v headless-spotify 2>/dev/null || true)"; [ -n "$PATH_BIN" ]; then
+  # Already installed and on PATH, which is the Homebrew cask layout: the cask
+  # links its binary into $(brew --prefix)/bin. On Intel that is
+  # /usr/local/bin, i.e. exactly $BIN — so installing here would overwrite the
+  # package manager's own link and leave a file `brew uninstall` does not know
+  # about. Use it where it is instead.
+  BIN="$PATH_BIN"
+  echo "using the headless-spotify already on PATH: $BIN"
 elif BUILT_BIN="$(find_built headless-spotify)"; then
   install -m 0755 "$BUILT_BIN" "$BIN"
   echo "installed $BUILT_BIN -> $BIN"
@@ -96,8 +111,9 @@ HIDE_OK=1
 sudo -u "$SUDO_USER" "$BIN" hide --skip-plist --spotify-app "$SPOTIFY_APP" || HIDE_OK=0
 if [ "$HIDE_OK" -eq 0 ]; then
   echo "" >&2
-  echo "install: hiding did not verify. The CLI, dylib and menu bar app are" >&2
-  echo "install: still installed and working, and Spotify is left as it was." >&2
+  echo "install: hiding did not verify (Spotify >= 1.3.1 quits when LSUIElement" >&2
+  echo "install: is set). The CLI, dylib and menu bar app are still installed" >&2
+  echo "install: and working, and Spotify is left exactly as it was." >&2
   if [ "${KEEP_ON_FAILURE:-0}" = "1" ]; then
     echo "install: LSUIElement left in place (KEEP_ON_FAILURE=1) — Spotify may not launch." >&2
     echo "install: undo with: headless-spotify restore" >&2
@@ -126,11 +142,21 @@ else
   echo "warning: injector dylib not built ($DYLIB_SRC missing) — plist mode only." >&2
 fi
 
-# 5. Menu bar extra: an LSUIElement .app whose menu shows the project name and
-#    a single Quit action. No Dock icon, no Cmd-Tab, no extra permissions.
+# 5. Menu bar extra: an LSUIElement .app whose menu shows the project name, an
+#    Enable/Disable hiding toggle and Quit. No Dock icon, no Cmd-Tab, no extra
+#    permissions.
+#
+#    Deliberately NOT gated on HIDE_OK. Two reasons. A Homebrew cask already
+#    moved the bundle into /Applications before this script ever ran, so there
+#    is nothing here to install — only to leave alone. And when hiding does not
+#    verify (Spotify >= 1.3.1 quits on LSUIElement=true), the icon is the one
+#    control surface the user has left: `status` and `restore` both work, and
+#    the toggle is how they get back to normal. Only HIDE_OK gating belongs on
+#    the watcher, below, which has nothing to do without hiding.
 if [ "${INSTALL_MENUBAR:-1}" = "0" ]; then
   echo "skipping menu bar app (INSTALL_MENUBAR=0)"
 else
+  MENUBAR_DEST="/Applications/headless-spotify.app"
   MENUBAR_APP=""
   # Candidate order: tarball root (release download), Homebrew prefix
   # (share/headless-spotify/../..), dist/ (local build), then build it.
@@ -144,24 +170,32 @@ else
       break
     fi
   done
-  if [ -z "$MENUBAR_APP" ] && [ -f "$SCRIPT_DIR/scripts/build-menubar.sh" ]; then
+  # A bundle already in /Applications was put there by `brew install --cask`,
+  # which owns it. Building a second copy to overwrite it would defeat the
+  # upgrade path, so leave it and just make sure it is running.
+  if [ -z "$MENUBAR_APP" ] && [ ! -d "$MENUBAR_DEST" ] \
+    && [ -f "$SCRIPT_DIR/scripts/build-menubar.sh" ]; then
     "$SCRIPT_DIR/scripts/build-menubar.sh" >/dev/null 2>&1 || true
     if [ -d "$SCRIPT_DIR/dist/headless-spotify.app" ]; then
       MENUBAR_APP="$SCRIPT_DIR/dist/headless-spotify.app"
     fi
   fi
   if [ -n "$MENUBAR_APP" ]; then
-    MENUBAR_DEST="/Applications/headless-spotify.app"
+    pkill -f headless-spotify-bar 2>/dev/null || true
     rm -rf "$MENUBAR_DEST"
     cp -R "$MENUBAR_APP" "$MENUBAR_DEST"
     echo "installed menu bar app -> $MENUBAR_DEST"
+  elif [ -d "$MENUBAR_DEST" ]; then
+    echo "menu bar app already at $MENUBAR_DEST (installed by Homebrew) — leaving it"
+  else
+    echo "warning: menu bar app not built — run ./scripts/build-menubar.sh to get it" >&2
+  fi
+  if [ -d "$MENUBAR_DEST" ]; then
     if sudo -u "$SUDO_USER" /usr/bin/open -g "$MENUBAR_DEST" 2>/dev/null; then
       echo "menu bar app launched — click its icon in the top bar for the name + Quit menu"
     else
       echo "launch it any time with: open \"$MENUBAR_DEST\""
     fi
-  else
-    echo "warning: menu bar app not built — run ./scripts/build-menubar.sh to get it" >&2
   fi
 fi
 

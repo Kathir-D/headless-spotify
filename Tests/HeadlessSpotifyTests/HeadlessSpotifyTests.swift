@@ -321,13 +321,21 @@ struct InjectorTests {
 
     @Test("locate order: explicit > env > installed")
     func locateOrder() throws {
-        #expect(Injector.locate(explicit: "/tmp/a.dylib") == "/tmp/a.dylib")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("inj-\(UUID().uuidString)")
+        let installed = root.appendingPathComponent(Injector.dylibFileName)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data().write(to: installed)
+        #expect(Injector.locate(explicit: "/tmp/a.dylib", installedPath: installed.path) == "/tmp/a.dylib")
         let saved = ProcessInfo.processInfo.environment[Injector.envOverride]
         setenv(Injector.envOverride, "/tmp/env.dylib", 1)
-        #expect(Injector.locate(explicit: nil) == "/tmp/env.dylib")
+        #expect(Injector.locate(explicit: nil, installedPath: installed.path) == "/tmp/env.dylib")
         if let saved { setenv(Injector.envOverride, saved, 1) } else { unsetenv(Injector.envOverride) }
         try withoutEnvOverride {
-            #expect(Injector.locate(explicit: "", cliBinaryPath: "/nonexistent/cli") == nil)
+            // Nothing anywhere: a machine that has run install.sh really does
+            // have /usr/local/lib/headless-spotify/…, and a test that fails
+            // there is a test that fails on every machine that used the tool.
+            let missing = root.appendingPathComponent("nowhere").path
+            #expect(Injector.locate(explicit: "", cliBinaryPath: "/nonexistent/cli", installedPath: missing) == nil)
         }
     }
 
@@ -341,7 +349,15 @@ struct InjectorTests {
         let dylib = lib.appendingPathComponent(Injector.dylibFileName)
         try Data().write(to: dylib)
         try withoutEnvOverride {
-            let found = Injector.locate(explicit: nil, cliBinaryPath: bin.appendingPathComponent("headless-spotify").path)
+            // The installed-path probe sits between the env var and the
+            // CLI-relative search, so it has to miss for this to be testing
+            // the layout rather than whatever this machine happens to have.
+            let missing = root.appendingPathComponent("nowhere").path
+            let found = Injector.locate(
+                explicit: nil,
+                cliBinaryPath: bin.appendingPathComponent("headless-spotify").path,
+                installedPath: missing
+            )
             #expect(found == dylib.standardized.path)
         }
     }

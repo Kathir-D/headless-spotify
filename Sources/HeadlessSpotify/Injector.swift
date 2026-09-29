@@ -22,7 +22,16 @@ public enum Injector: Sendable {
     /// Resolution order: --injector flag > $HEADLESS_INJECTOR_DYLIB >
     /// /usr/local/lib/headless-spotify/… > paths relative to the CLI binary
     /// (dev side-by-side, Homebrew bin/../lib, /usr/local layout).
-    public static func locate(explicit: String?, cliBinaryPath: String? = nil) -> String? {
+    ///
+    /// `installedPath` is a parameter so the tests can point it at a fixture
+    /// instead of the real /usr/local/lib. It is machine state that any
+    /// developer who has run install.sh — the documented install step — has,
+    /// which is exactly the state a test suite must not depend on.
+    public static func locate(
+        explicit: String?,
+        cliBinaryPath: String? = nil,
+        installedPath: String = Injector.installedPath
+    ) -> String? {
         if let explicit, !explicit.isEmpty { return explicit }
         if let env = ProcessInfo.processInfo.environment[envOverride], !env.isEmpty { return env }
         if FileManager.default.fileExists(atPath: installedPath) { return installedPath }

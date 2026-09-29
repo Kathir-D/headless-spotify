@@ -85,13 +85,47 @@ chmod +x "$STAGE/install.sh" "$STAGE/uninstall.sh"
 # Menu bar extra as a ready-to-install LSUIElement .app at the tarball root,
 # so install.sh can drop it in /Applications without a toolchain. SKIP_BUILD
 # + BUILD_DIR reuse exactly the products staged above (universal when
-# multi-arch) instead of re-detecting a build directory.
-SKIP_BUILD=1 BUILD_DIR="$BUILD_DIR" ./scripts/build-menubar.sh >/dev/null
+# multi-arch) instead of re-detecting a build directory. DYLIB names the
+# injector explicitly: build-menubar.sh only builds the bar binary, so left to
+# its own search it would not find a dylib in a single-arch .build/<triple>/.
+SKIP_BUILD=1 BUILD_DIR="$BUILD_DIR" DYLIB="$BUILD_DIR/libHeadlessSpotifyInjector.dylib" \
+  ./scripts/build-menubar.sh >/dev/null
 if [ -d "dist/headless-spotify.app" ]; then
   cp -R "dist/headless-spotify.app" "$STAGE/"
 else
   echo "warning: menu bar app not built — tarball ships the CLI only" >&2
 fi
+
+# The Homebrew cask moves the .app into /Applications and nothing else, so
+# everything the privileged step needs has to be inside the bundle. A glob that
+# quietly matches nothing ships a release whose install.sh is unreachable, with
+# nothing in the build output to say so — assert the files are really there.
+for bundled in \
+  Contents/MacOS/headless-spotify-bar \
+  Contents/Resources/install.sh \
+  Contents/Resources/uninstall.sh \
+  Contents/Resources/lib/libHeadlessSpotifyInjector.dylib; do
+  if [ ! -e "$STAGE/headless-spotify.app/$bundled" ]; then
+    echo "error: $bundled is missing from the app bundle" >&2
+    exit 1
+  fi
+done
+# install.sh has to arrive executable, or `sudo .../install.sh` fails with a
+# permission error that reads like a broken download.
+for exec_bit in Contents/Resources/install.sh Contents/Resources/uninstall.sh; do
+  if [ ! -x "$STAGE/headless-spotify.app/$exec_bit" ]; then
+    echo "error: $exec_bit is not executable in the app bundle" >&2
+    exit 1
+  fi
+done
+# A resource added after the ad-hoc signature invalidates the seal, and macOS
+# then refuses to launch the app at all — which would be a silent regression,
+# because the bundle still exists and still looks fine.
+if ! /usr/bin/codesign --verify --strict "$STAGE/headless-spotify.app" >/dev/null 2>&1; then
+  echo "error: codesign --verify fails on the app bundle — a resource was added after signing?" >&2
+  exit 1
+fi
+echo "ok: app bundle carries install.sh, uninstall.sh, the dylib, and verifies"
 
 TARBALL="dist/headless-spotify-$VERSION-macos.tar.gz"
 tar -czf "$TARBALL" -C dist/stage "headless-spotify-$VERSION"

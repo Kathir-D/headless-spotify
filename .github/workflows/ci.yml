@@ -13,11 +13,49 @@ jobs:
         run: swift build
       - name: Test
         run: swift test
-      - name: Audit formula (style only, no network)
+      - name: Package the release tarball
+        run: ./scripts/package-release.sh
+      - name: Stage the cask against the tarball this build just made
+        run: ./scripts/stage-cask-for-ci.sh
+      - name: Style the cask
         run: |
-          # `brew audit [path]` is disabled: stage the formula in a local tap.
-          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          TAPDIR="$(brew --repository)/Library/Taps/$OWNER/homebrew-headless-spotify"
-          mkdir -p "$TAPDIR/Formula"
-          cp Formula/headless-spotify.rb "$TAPDIR/Formula/"
-          brew audit --strict "$OWNER/headless-spotify/headless-spotify"
+          # One offense is expected and unsatisfiable: Cask/InstallSteps on the
+          # postflight block. Homebrew requires postflight_steps, whose DSL
+          # exposes no way to run a command, and forbids suppressing the cop.
+          # The cask says so at length where the block is; this is the one
+          # command that checks everything else.
+          brew style --except Cask/InstallSteps \
+            "${{ steps.stage.outputs.cask }}"
+      - name: Audit the cask
+        run: |
+          # `brew audit` is the gate Homebrew actually enforces, and the only
+          # one that looks at the artifact.
+          #
+          # The staging rewrite points the cask at a file:// URL so the audit
+          # checks the tarball this job built instead of whatever is published.
+          # A versioned https:// release URL never trips the one check a
+          # file:// URL does — sha256_no_check_if_unversioned, which objects
+          # that a cask pinned to no version must not carry a checksum — so
+          # that single check is excluded here and only here.
+          brew audit --cask --strict --except sha256_no_check_if_unversioned \
+            "${{ steps.stage.outputs.cask }}"
+
+  install-the-cask:
+    # The complaint this packaging exists to fix was "brew install leaves
+    # nothing in the menu bar", and nothing short of installing it proves
+    # otherwise. A cask has no `test do` block either, so this is where the
+    # checks the old formula's test block used to make now live.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and package
+        run: ./scripts/package-release.sh
+      - name: Stage the cask against that tarball
+        id: stage
+        run: ./scripts/stage-cask-for-ci.sh
+      - name: Install it, and check what actually landed
+        run: ./scripts/check-cask-install.sh "${{ steps.stage.outputs.cask }}"
+      - name: Uninstall it
+        run: |
+          brew uninstall --cask "${{ steps.stage.outputs.cask }}"
+          test ! -d /Applications/headless-spotify.app
