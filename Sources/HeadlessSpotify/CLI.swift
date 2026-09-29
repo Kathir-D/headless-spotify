@@ -106,7 +106,7 @@ public enum ParseError: Error, Sendable, Equatable {
 }
 
 public enum CLI: Sendable {
-    public static let version = "0.1.0-beta.3"
+    public static let version = "0.1.0-beta.4"
     public static let defaultSpotifyAppPath = "/Applications/Spotify.app"
     public static let bundleID = "com.spotify.client"
 

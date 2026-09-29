@@ -20,9 +20,20 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
-TARBALL="$(cd dist && ls headless-spotify-*-macos.tar.gz 2>/dev/null | head -1 || true)"
-if [ -z "$TARBALL" ]; then
-  echo "error: no tarball in dist/ — run scripts/package-release.sh first" >&2
+# The tarball for the version in VERSION, named exactly.
+#
+# Not `ls dist/headless-spotify-*-macos.tar.gz | head -1`. That takes whichever
+# entry the glob happens to sort first, so on a machine that still has an older
+# tarball in dist/ it stages the cask against *that* one: the sha256 matches, the
+# download succeeds, and then the install fails with "the App source ... is not
+# there", because the cask's `app` stanza looks for a directory named after
+# VERSION and the stale tarball unpacks under the old one. A CI runner has a
+# clean dist/ and never sees it, which is why it survived.
+VERSION="$(tr -d ' \t\r\n' < VERSION)"
+TARBALL="headless-spotify-$VERSION-macos.tar.gz"
+if [ ! -f "dist/$TARBALL" ]; then
+  echo "error: dist/$TARBALL is missing — run scripts/package-release.sh first" >&2
+  echo "       (dist/ holds: $(ls dist/*.tar.gz 2>/dev/null | tr '\n' ' ' || echo nothing))" >&2
   exit 1
 fi
 SHA="$(cd dist && shasum -a 256 "$TARBALL" | cut -d' ' -f1)"

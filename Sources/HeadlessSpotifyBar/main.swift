@@ -42,6 +42,53 @@ func cliPath() -> String? {
     )
 }
 
+// MARK: - Running the CLI
+
+/// Runs a short command and returns its exit code.
+///
+/// Deliberately not the main thread and with no output plumbing: the only
+/// commands run through here are `xattr -p` and `xattr -dr`, which are
+/// instantaneous, and the result is a single Int32.
+private func runForExitCode(_ executable: String, _ arguments: [String]) async -> Int32 {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments
+            // xattr prints the attribute's value on stdout. Discarding it keeps
+            // a stray value out of the menu bar app's own output.
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: Int32(127))
+                return
+            }
+            process.waitUntilExit()
+            continuation.resume(returning: process.terminationStatus)
+        }
+    }
+}
+
+/// Strip Gatekeeper's quarantine attribute from the CLI, if it carries one.
+///
+/// See `Quarantine` in MenuBarModel for why this is here: a quarantined binary
+/// launched by this GUI app hangs in dyld behind a "could not verify" alert,
+/// and the toggle would appear to do nothing at all. An install that predates
+/// the cask fix still has one, and the user cannot fix that without noticing
+/// what is wrong.
+///
+/// Returns a short line for the menu when something actually had to be removed,
+/// so the repair is visible rather than silent, and nil otherwise.
+private func repairQuarantineIfNeeded(cli: String) async -> String? {
+    guard await Quarantine.isQuarantined(cli, run: runForExitCode) else { return nil }
+    guard await Quarantine.clearIfNeeded(at: cli, run: runForExitCode) else {
+        return "Could not clear Gatekeeper quarantine; try reinstalling"
+    }
+    return "Cleared Gatekeeper quarantine on the CLI"
+}
+
 // MARK: - Menu controller
 
 @MainActor
@@ -134,16 +181,34 @@ final class MenuController: NSObject, NSMenuDelegate {
             bundleWritable: FileManager.default.isWritableFile(atPath: infoPlistURL.path)
         )
         let elevate = plan.count > 1
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // A Task, not DispatchQueue.async: the body awaits the quarantine
+        // repair, and an async closure is not a synchronous work item.
+        //
+        // `[weak self]` is not needed and would be wrong here — the toggle has
+        // to finish and update the menu even if the controller went away, and
+        // the closure only touches `self` after hopping to the main actor.
+        Task.detached(priority: .userInitiated) {
             if elevate {
                 // Bring the password dialog to the front: an LSUIElement app
                 // has no Dock icon to click.
-                DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
+                await MainActor.run { NSApp.activate(ignoringOtherApps: true) }
             }
-            let result = Self.run(plan)
-            DispatchQueue.main.async {
+            // Before anything is run, not after: a quarantined CLI blocks
+            // inside dyld and never returns, so waiting to find out would mean
+            // waiting forever.
+            let repair = await repairQuarantineIfNeeded(cli: cli)
+            let result = await Task.detached(priority: .userInitiated) { Self.run(plan) }.value
+            await MainActor.run { [weak self] in
                 self?.isBusy = false
-                self?.message = result.succeeded ? nil : MenuBarModel.statusMessage(result.output)
+                if result.succeeded {
+                    // A repair note is only interesting if the toggle worked;
+                    // otherwise it is noise on a menu that reports state.
+                    self?.message = repair
+                } else if let repair {
+                    self?.message = MenuBarModel.statusMessage("\(repair); \(result.output)")
+                } else {
+                    self?.message = MenuBarModel.statusMessage(result.output)
+                }
                 self?.rebuild()  // also refreshes the icon for the new state
             }
         }

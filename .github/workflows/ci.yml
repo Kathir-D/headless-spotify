@@ -15,6 +15,28 @@ jobs:
         run: swift test
       - name: Package the release tarball
         run: ./scripts/package-release.sh
+      - name: Check the app icon renders as the artwork
+        # package-release.sh already does this on the staged bundle. Repeated
+        # here, against a second render, so the job fails loudly on the icon
+        # rather than burying it in a packaging step that also does six other
+        # things — the grey-plate failure this guards is invisible in the file,
+        # so it is worth naming in the log.
+        run: ./scripts/check-icon.sh dist/headless-spotify.app
+      - name: The icon's mark is the symbol the menu bar shows
+        # scripts/make-icon.swift cannot import MenuBarModel, so the two could
+        # drift. One grep closes that gap: if the top-bar icon ever changes,
+        # this fails and make-icon.swift is updated to match.
+        run: |
+          set -eu
+          ICON_SYMBOL="$(sed -n 's/^let markSymbolName = "\(.*\)"$/\1/p' scripts/make-icon.swift)"
+          BAR_SYMBOL="$(sed -n 's/.*visibleIconSymbolName = "\(.*\)".*/\1/p' Sources/HeadlessSpotifyBarKit/MenuBarModel.swift)"
+          test -n "$ICON_SYMBOL" || { echo "could not read markSymbolName from make-icon.swift"; exit 1; }
+          test -n "$BAR_SYMBOL" || { echo "could not read visibleIconSymbolName from MenuBarModel.swift"; exit 1; }
+          if [ "$ICON_SYMBOL" != "$BAR_SYMBOL" ]; then
+            echo "::error::the app icon draws '$ICON_SYMBOL' but the menu bar shows '$BAR_SYMBOL' — they are meant to be the same mark"
+            exit 1
+          fi
+          echo "ok: the icon and the menu bar both use $ICON_SYMBOL"
       - name: Stage the cask against the tarball this build just made
         id: stage
         run: |

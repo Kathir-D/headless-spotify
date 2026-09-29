@@ -20,7 +20,7 @@
 # (.github/workflows/release.yml) on every `v*` tag, which also copies this
 # file into the Kathir-D/homebrew-tap tap — do not hand-edit them.
 cask "headless-spotify" do
-  version "0.1.0-beta.3"
+  version "0.1.0-beta.4"
   sha256 "2430b62084e3e1c2a116f68e27cbda630e2f0de9d6b4d07e45371ea10054189b"
 
   url "https://github.com/Kathir-D/headless-spotify/releases/download/v#{version}/headless-spotify-#{version}-macos.tar.gz"
@@ -54,6 +54,20 @@ cask "headless-spotify" do
   # from this tap. `brew install --no-quarantine` would say the same thing, but
   # it was removed in Homebrew 7 and `postflight_steps` cannot run a command.
   #
+  # The Caskroom is cleared as well as the app, and that second path is not
+  # tidiness — it is the actual bug this cask had. `binary` links
+  # /opt/homebrew/bin/headless-spotify at the copy Homebrew staged in the
+  # Caskroom, which is *outside* the .app, so clearing the bundle left that
+  # binary quarantined. The menu bar extra is a GUI process, and a GUI process
+  # exec'ing a quarantined binary is the one case that trips Gatekeeper's
+  # assessment: dyld blocks inside _dyld_start, CoreServicesUIAgent puts up
+  # "Apple could not verify "headless-spotify" is free of malware", and the
+  # Enable/Disable row hangs forever with no output. Running the same binary
+  # from a terminal does not prompt, which is why the CLI's own `--version`
+  # check in scripts/check-cask-install.sh passed for as long as it existed and
+  # the bug shipped anyway. Sonar never hit this because it is `app` only:
+  # everything it installs lives inside the one bundle cleared here.
+  #
   # The rescue matters. Without it, removing `postflight` would not merely stop
   # the quarantine from being cleared — it would make the cask file invalid, and
   # an invalid cask stops the whole tap from loading, so `brew tap` would fail
@@ -73,6 +87,16 @@ cask "headless-spotify" do
       system_command(
         "/usr/bin/xattr",
         args:         ["-dr", "com.apple.quarantine", "/Applications/headless-spotify.app"],
+        must_succeed: false,
+      )
+      # The staged tree the `binary` stanza linked into the Homebrew prefix.
+      # `caskroom_path` is <HOMEBREW_CASKROOM>/headless-spotify; clearing it
+      # recursively covers bin/headless-spotify, the injector dylib, and the
+      # helper scripts, and costs one call. must_succeed stays false because a
+      # Homebrew that has dropped the accessor should not fail the install.
+      system_command(
+        "/usr/bin/xattr",
+        args:         ["-dr", "com.apple.quarantine", caskroom_path.to_s],
         must_succeed: false,
       )
       system_command(

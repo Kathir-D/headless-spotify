@@ -76,6 +76,45 @@ if [ -e /usr/local/bin/headless-spotify ] && [ ! -L /usr/local/bin/headless-spot
   exit 1
 fi
 
+# And it is not still quarantined.
+#
+# This is the check whose absence let a real bug ship. The `binary` stanza links
+# /opt/homebrew/bin/headless-spotify at the copy Homebrew staged in the
+# Caskroom, which is outside the .app the postflight used to clear, so that
+# binary kept its `com.apple.quarantine` attribute. A GUI process running it —
+# which is exactly what the menu bar extra is — gets Gatekeeper's assessment,
+# and the child hangs inside `_dyld_start` behind an "Apple could not verify
+# 'headless-spotify' is free of malware" alert. The toggle simply never
+# returns.
+#
+# `headless-spotify --version` above does NOT catch it: run from a shell, a
+# quarantined binary prompts for nothing and exits normally. That is why this
+# asks xattr directly instead of inferring the answer from a successful run.
+CLI_PATH="$(command -v headless-spotify)"
+if /usr/bin/xattr -p com.apple.quarantine "$CLI_PATH" >/dev/null 2>&1; then
+  echo "error: $CLI_PATH is still quarantined." >&2
+  echo "       The menu bar extra runs it from a GUI process, which makes" >&2
+  echo "       Gatekeeper block the process and show 'could not verify'." >&2
+  echo "       The cask's postflight must clear the Caskroom, not just the .app." >&2
+  exit 1
+fi
+
+# Nothing anywhere in the install may still be quarantined, because the bundle's
+# own helpers (install.sh, the injector dylib) get run with sudo later and a
+# quarantined dylib cannot be injected at all.
+for quarantined in $(/usr/bin/xattr -r -p com.apple.quarantine "$APP" 2>/dev/null | cut -d: -f1); do
+  echo "error: $quarantined inside the installed app is still quarantined" >&2
+  exit 1
+done
+for quarantined in $(/usr/bin/xattr -r -p com.apple.quarantine "$(brew --prefix)/Caskroom/headless-spotify" 2>/dev/null | cut -d: -f1); do
+  echo "error: $quarantined in the Caskroom is still quarantined" >&2
+  exit 1
+done
+
+# The icon, rendered rather than merely present. See scripts/check-icon.sh for
+# why the pixels have to be looked at.
+"$SCRIPT_DIR/scripts/check-icon.sh" "$APP"
+
 # And it runs. An LSUIElement app has to actually reach the menu bar, which
 # "the process exists" is the closest a CI runner can get to proving.
 sleep 2

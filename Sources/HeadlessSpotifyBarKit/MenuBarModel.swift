@@ -195,7 +195,71 @@ public enum CLILocator: Sendable {
     }
 }
 
-// MARK: - Toggle command plan
+// MARK: - Gatekeeper quarantine
+
+/// Removal of `com.apple.quarantine` from the CLI the toggle drives.
+///
+/// This exists because of a bug that made the Enable/Disable row look broken.
+/// The Homebrew cask's postflight cleared the quarantine attribute from the
+/// .app but not from the Caskroom copy of the CLI that its `binary` stanza
+/// links into the Homebrew prefix, so that binary stayed quarantined. A menu
+/// bar extra is a GUI process, and a GUI process exec'ing a quarantined binary
+/// is the case that trips Gatekeeper's assessment: dyld blocks inside
+/// `_dyld_start`, CoreServicesUIAgent puts up "Apple could not verify
+/// "headless-spotify" is free of malware", and the toggle never returns. The
+/// same binary run from a terminal prompts for nothing, which is why nothing
+/// caught it.
+///
+/// The cask now clears the Caskroom too, but that only helps installs that
+/// happen after the fix. Somebody who already has the app on disk — and
+/// everybody who upgrades in place — still has a quarantined CLI, and the
+/// symptom is a menu that silently does nothing. So the app repairs it itself
+/// before it runs anything.
+///
+/// Clearing the attribute is the same decision the cask already makes, on the
+/// same file, for the same reason: `brew install` verified a SHA-256 over this
+/// exact tarball before any of it was unpacked. It is also why this only ever
+/// touches the single file it is about to execute, and why it is a no-op when
+/// there is nothing to clear.
+public enum Quarantine: Sendable {
+    public static let attribute = "com.apple.quarantine"
+    public static let xattr = "/usr/bin/xattr"
+    /// The recursive-delete form, which is what makes one call enough.
+    public static let recursiveDelete = ["-dr"]
+
+    /// A command to run, so the whole thing is testable without touching the
+    /// filesystem. Mirrors `SpotifyScripting.Runner`, but kept local so this
+    /// target stays free of a dependency on the CLI target.
+    public typealias Runner = @Sendable (String, [String]) async -> Int32
+
+    /// Strip the attribute from `path` if it is there. Returns true when the
+    /// path is clear afterwards, whether or not anything had to be removed.
+    ///
+    /// Only the file itself is touched, never a parent directory. The Caskroom
+    /// copy is user-owned, so this needs no privileges, and the narrow scope
+    /// means a mistaken path cannot strip quarantine from something unrelated.
+    @discardableResult
+    public static func clearIfNeeded(at path: String, run: Runner) async -> Bool {
+        guard !path.isEmpty else { return false }
+        guard await isQuarantined(path, run: run) else { return true }
+        _ = await run(xattr, recursiveDelete + [attribute, path])
+        // Re-probed rather than assuming the delete worked: xattr's exit code
+        // is the only answer available, and a file the user cannot write fails
+        // silently. Returning `isQuarantined` here would report that failure as
+        // success, which is the one thing the caller uses this for.
+        return !(await isQuarantined(path, run: run))
+    }
+
+    /// True when `xattr -p` reports the attribute on `path`.
+    ///
+    /// `xattr -p` exits 0 when the attribute is there and non-zero when it is
+    /// not, so the exit code is the whole answer. Nothing is parsed, which also
+    /// means a path that does not exist reads as "not quarantined" — the right
+    /// answer, since there is then nothing to clear.
+    public static func isQuarantined(_ path: String, run: Runner) async -> Bool {
+        await run("/usr/bin/xattr", ["-p", attribute, path]) == 0
+    }
+}
 
 /// Which way the toggle goes.
 public enum ToggleAction: Sendable, Equatable {

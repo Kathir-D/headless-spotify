@@ -1169,3 +1169,108 @@ struct RestoreNoOpTests {
         #expect(lines.values.joined().contains("original Info.plist"))
     }
 }
+
+@Suite("Gatekeeper quarantine on the CLI")
+struct QuarantineTests {
+    /// A fake xattr: records the calls and answers from a mutable script.
+    ///
+    /// Synchronous on purpose. `Quarantine.Runner` is async only so the call
+    /// sites read the same as the CLI's own runner; nothing in the fake needs
+    /// to suspend, and holding an `NSLock` across an `await` is exactly the
+    /// mistake Swift 6 rejects.
+    private final class FakeXattr: @unchecked Sendable {
+        struct Call: Equatable {
+            var executable: String
+            var arguments: [String]
+        }
+        private var recorded: [Call] = []
+        private var quarantined: Set<String>
+        /// Set when the delete should fail, to model a file the user cannot write.
+        var deleteFails = false
+
+        init(quarantined: Set<String>) { self.quarantined = quarantined }
+
+        var calls: [Call] { recorded }
+
+        func answer(_ executable: String, _ arguments: [String]) -> Int32 {
+            recorded.append(Call(executable: executable, arguments: arguments))
+            let path = arguments.last ?? ""
+            if arguments.first == "-p" {
+                return quarantined.contains(path) ? 0 : 1
+            }
+            if arguments.first == "-dr" {
+                guard !deleteFails else { return 1 }
+                quarantined.remove(path)
+                return 0
+            }
+            return 1
+        }
+
+        var runner: Quarantine.Runner { { [self] exe, args in answer(exe, args) } }
+    }
+
+    @Test("an unquarantined CLI is left alone")
+    func cleanFileIsUntouched() async {
+        let fake = FakeXattr(quarantined: [])
+        let cleared = await Quarantine.clearIfNeeded(at: "/opt/homebrew/bin/headless-spotify", run: fake.runner)
+        #expect(cleared, "a file with no attribute is already clear")
+        // One probe and nothing else. The probe is unavoidable — it is how we
+        // learn there is nothing to do — but no delete may be issued.
+        #expect(fake.calls.count == 1, "expected only a probe, got \(fake.calls)")
+        #expect(fake.calls[0].arguments == ["-p", Quarantine.attribute, "/opt/homebrew/bin/headless-spotify"])
+    }
+
+    @Test("a quarantined CLI is cleared before it is run")
+    func quarantinedFileIsCleared() async {
+        let cli = "/opt/homebrew/Caskroom/headless-spotify/0.1.0/bin/headless-spotify"
+        let fake = FakeXattr(quarantined: [cli])
+        let cleared = await Quarantine.clearIfNeeded(at: cli, run: fake.runner)
+        #expect(cleared)
+        // Probe, delete, probe again: the result is verified, not assumed.
+        #expect(fake.calls.count == 3, "expected probe, delete, probe; got \(fake.calls)")
+        #expect(fake.calls[0].arguments == ["-p", Quarantine.attribute, cli])
+        #expect(fake.calls[1] == .init(executable: Quarantine.xattr,
+                                       arguments: ["-dr", Quarantine.attribute, cli]))
+        #expect(fake.calls[2].arguments == ["-p", Quarantine.attribute, cli])
+    }
+
+    @Test("a failed delete is reported rather than claimed as fixed")
+    func failedDeleteIsNotSuccess() async {
+        let cli = "/opt/homebrew/bin/headless-spotify"
+        let fake = FakeXattr(quarantined: [cli])
+        fake.deleteFails = true
+        let cleared = await Quarantine.clearIfNeeded(at: cli, run: fake.runner)
+        #expect(!cleared, "the caller must be able to tell the user it did not work")
+    }
+
+    @Test("an empty path is refused without running anything")
+    func emptyPath() async {
+        let fake = FakeXattr(quarantined: [])
+        let cleared = await Quarantine.clearIfNeeded(at: "", run: fake.runner)
+        #expect(!cleared)
+        #expect(fake.calls.isEmpty)
+    }
+
+    @Test("the attribute and the tool are the real ones")
+    func constants() {
+        #expect(Quarantine.attribute == "com.apple.quarantine")
+        #expect(Quarantine.xattr == "/usr/bin/xattr")
+    }
+
+    @Test("the probe asks xattr the question xattr answers with an exit code")
+    func probeUsesExitCode() async {
+        let fake = FakeXattr(quarantined: ["/x"])
+        #expect(await Quarantine.isQuarantined("/x", run: fake.runner))
+        #expect(!(await Quarantine.isQuarantined("/y", run: fake.runner)))
+    }
+
+    @Test("only the one file is touched, never a parent directory")
+    func scopeIsOneFile() async {
+        let cli = "/opt/homebrew/Caskroom/headless-spotify/0.1.0/bin/headless-spotify"
+        let fake = FakeXattr(quarantined: [cli])
+        _ = await Quarantine.clearIfNeeded(at: cli, run: fake.runner)
+        for call in fake.calls {
+            #expect(call.arguments.last == cli, "every call must name exactly the CLI: \(call)")
+        }
+    }
+}

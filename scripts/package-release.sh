@@ -102,6 +102,7 @@ fi
 # nothing in the build output to say so — assert the files are really there.
 for bundled in \
   Contents/MacOS/headless-spotify-bar \
+  Contents/Resources/AppIcon.icns \
   Contents/Resources/install.sh \
   Contents/Resources/uninstall.sh \
   Contents/Resources/lib/libHeadlessSpotifyInjector.dylib; do
@@ -110,6 +111,11 @@ for bundled in \
     exit 1
   fi
 done
+# The icon has to be the artwork, not a grey plate. Every file-level check
+# passes on a broken one — iconutil succeeds, the round-trip succeeds,
+# codesign is happy — so this renders the icon the way the Dock does and looks
+# at it. See scripts/check-icon.sh.
+"$SCRIPT_DIR/scripts/check-icon.sh" "$STAGE/headless-spotify.app"
 # install.sh has to arrive executable, or `sudo .../install.sh` fails with a
 # permission error that reads like a broken download.
 for exec_bit in Contents/Resources/install.sh Contents/Resources/uninstall.sh; do

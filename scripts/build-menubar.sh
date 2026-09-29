@@ -30,6 +30,7 @@
 #   BUILD_DIR=<dir>    package an already-built binary (skips detection)
 #   DYLIB=<path>       injector dylib to embed (default: look next to the build)
 #   SKIP_BUILD=1       reuse existing build products
+#   SKIP_ICON=1        ship without drawing the app icon (debugging the bundling)
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -125,6 +126,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>$APP_NAME</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
     <key>CFBundleVersion</key>
@@ -182,6 +185,30 @@ fi
 # Documentation, so the version a user is looking at explains itself.
 cp "$SCRIPT_DIR/LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$SCRIPT_DIR/VERSION" "$APP/Contents/Resources/VERSION"
+
+# The app icon, drawn by scripts/make-icon.swift rather than checked in as a
+# bitmap, so a colour or a proportion is a one-line edit instead of a binary
+# nobody can regenerate. It is generated here, before the signature below, for
+# the same reason the helpers are copied before it: a file added to a
+# signed bundle breaks its seal, and macOS then refuses to launch the app.
+#
+# CFBundleIconFile (written into Info.plist above) names AppIcon without the
+# .icns, which is what macOS looks for in Contents/Resources.
+if [ -z "${SKIP_ICON:-}" ]; then
+  echo "drawing the app icon…"
+  if ! swift "$SCRIPT_DIR/scripts/make-icon.swift" "$APP/Contents/Resources/AppIcon.icns"; then
+    echo "error: could not build the app icon — refusing to ship an app with none" >&2
+    rm -rf "$APP"
+    exit 1
+  fi
+  if [ ! -s "$APP/Contents/Resources/AppIcon.icns" ]; then
+    echo "error: the icon generator produced no AppIcon.icns" >&2
+    rm -rf "$APP"
+    exit 1
+  fi
+else
+  echo "SKIP_ICON set — shipping the bundle without an icon" >&2
+fi
 
 /usr/bin/codesign --force --sign - "$APP" >/dev/null 2>&1 \
   || echo "warning: ad-hoc signing failed (the app still runs locally)" >&2

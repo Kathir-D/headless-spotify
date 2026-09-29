@@ -40,6 +40,7 @@ Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — win
 - **Watcher daemon** (LaunchAgent) re-applies hiding when Spotify self-updates or the Dock icon returns.
 - **Media passthrough** (`control play|pause|toggle|next|previous|volume|…`) using the same AppleScript Sonar uses — never launches Spotify as a side effect.
 - **Menu bar extra**: a top-bar icon whose menu shows the project name, an **Enable/Disable hiding** toggle that drives the same CLI, and Quit. It is itself `LSUIElement`, so it has no Dock icon and no Cmd-Tab entry. `brew install --cask` puts it in `/Applications` and starts it — no `sudo`, and it does not wait for hiding to work.
+- **An app icon in Sonar's colourway**: a macOS squircle with a disc ramped 45° from `#5BCEFA` to `#F5A9B8` and a white music note in the middle — the same mark the top bar shows. It is drawn by `scripts/make-icon.swift` on every build rather than checked in as a bitmap, so the colours are a one-line edit.
 - **Safe by design**: `install.sh` backs up `Info.plist` (+ the code-seal file); `restore`/`uninstall.sh` bring back the original Apple signature. `sudo` is needed only to edit Spotify's bundle.
 - **Zero dependencies**: Swift standard library + Foundation/AppKit only. No API keys, no certs, nothing to configure.
 
@@ -147,11 +148,11 @@ the Spotify edit.
 ### Direct download
 
 ```sh
-curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.3/headless-spotify-0.1.0-beta.3-macos.tar.gz
-curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.3/SHA256SUMS.txt
+curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.4/headless-spotify-0.1.0-beta.4-macos.tar.gz
+curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.4/SHA256SUMS.txt
 shasum -a 256 -c SHA256SUMS.txt
-tar -xzf headless-spotify-0.1.0-beta.3-macos.tar.gz
-cd headless-spotify-0.1.0-beta.3
+tar -xzf headless-spotify-0.1.0-beta.4-macos.tar.gz
+cd headless-spotify-0.1.0-beta.4
 sudo ./install.sh /Applications/Spotify.app
 ```
 
@@ -391,8 +392,10 @@ reports not-headless, `restore` returns to normal).
 |---|---|---|
 | `brew install kathir-d/tap/headless-spotify` installs nothing you can see | That was a formula, up to `0.1.0-beta.2`; a formula cannot put a bundle in `/Applications` | It is a cask now: `brew uninstall kathir-d/tap/headless-spotify && brew install --cask kathir-d/tap/headless-spotify` |
 | No `headless-spotify` icon in the top bar after installing | The `postflight` launch failed, or the app was quit | `open /Applications/headless-spotify.app` |
+| Clicking **Hidden from Dock** pops up "Apple could not verify 'headless-spotify' is free of malware", and the menu then does nothing | Fixed in `0.1.0-beta.4`. Before that, the cask cleared Gatekeeper's quarantine from the app but not from the CLI it links into `$(brew --prefix)/bin`, and a menu bar app is a GUI process — a GUI process running a quarantined binary hangs inside `dyld` behind that alert | Upgrade, or reinstall: `brew reinstall --cask kathir-d/tap/headless-spotify`. From `0.1.0-beta.4` the app also repairs a leftover-quarantine CLI by itself before running it |
 | `hide` exits 1, Spotify won't stay launched headless | Spotify ≥1.3.1 quits when `LSUIElement=true` is present | Run `headless-spotify restore`; track Spotify releases — no code change needed if they honor the key again |
 | Dock icon back after Spotify update | Updates rewrite `Info.plist` | Watcher re-applies automatically; or re-run `headless-spotify hide` |
+| Opening Sonar brings Spotify back into the Dock | Same Spotify ≥1.3.1 limitation as the row above: Sonar launches Spotify, Spotify quits on launch with `LSUIElement` set, and the rollback restores a normal Dock icon | `headless-spotify restore` stops the loop, or wait for Spotify to honor the key again |
 | `hide` says bundle not writable | Root-owned `/Applications` copy | Run the one sudo step: `sudo /Applications/headless-spotify.app/Contents/Resources/install.sh` |
 | Spotify won't launch after `hide` | Edited bundle, re-sign failed | Re-run `hide` (look for the re-sign error), or `restore` + reinstall Spotify |
 | `restore` warns signature invalid | Seal files diverge (e.g. manual edits after backup) | Reinstall Spotify from spotify.com, then `hide` again |

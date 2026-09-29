@@ -74,6 +74,21 @@ MENUBAR_APP="$MENUBAR_OUT/headless-spotify.app"
 [ "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$MENUBAR_APP/Contents/Info.plist")" = "true" ] \
   && echo "ok: menubar is LSUIElement (no Dock icon)"
 [ -x "$MENUBAR_APP/Contents/MacOS/headless-spotify-bar" ] && echo "ok: menubar executable present"
+# Rendered, not merely present: a malformed AppIcon.icns passes iconutil, the
+# iconset round-trip and codesign, and still shows a grey plate in the Dock.
+if ./scripts/check-icon.sh "$MENUBAR_APP" >/dev/null 2>&1; then
+  echo "ok: app icon renders as the artwork"; pass=$((pass + 1))
+else
+  echo "FAIL: app icon renders as the artwork"; ./scripts/check-icon.sh "$MENUBAR_APP" || true; fail=$((fail + 1))
+fi
+# The icon's mark and the top-bar icon are meant to be the same symbol.
+ICON_SYMBOL="$(sed -n 's/^let markSymbolName = "\(.*\)"$/\1/p' scripts/make-icon.swift)"
+BAR_SYMBOL="$(sed -n 's/.*visibleIconSymbolName = "\(.*\)".*/\1/p' Sources/HeadlessSpotifyBarKit/MenuBarModel.swift)"
+if [ -n "$ICON_SYMBOL" ] && [ "$ICON_SYMBOL" = "$BAR_SYMBOL" ]; then
+  echo "ok: the icon and the menu bar both use $ICON_SYMBOL"; pass=$((pass + 1))
+else
+  echo "FAIL: the icon draws '$ICON_SYMBOL' but the menu bar shows '$BAR_SYMBOL'"; fail=$((fail + 1))
+fi
 rm -rf "$MENUBAR_OUT"
 
 echo "== fixture hide/restore cycle =="
