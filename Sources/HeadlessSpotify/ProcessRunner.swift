@@ -21,10 +21,31 @@ public struct ProcessResult: Sendable, Equatable {
 }
 
 public enum ProcessRunner: Sendable {
-    /// Run an executable synchronously, capturing output. No shell involved.
-    /// `timeout` kills a hung child (exitCode 124) instead of blocking forever —
-    /// osascript against a half-launched app can otherwise block indefinitely.
-    public static func run(_ executable: String, _ args: [String], timeout: TimeInterval = 60) -> ProcessResult {
+    /// Child processes are waited on with blocking calls (sleep + group wait),
+    /// which must never happen on a Swift *cooperative* thread: the pool is
+    /// sized to the core count, so enough concurrent children would occupy
+    /// every thread and deadlock the whole program. Hop to a plain
+    /// DispatchQueue first, which has its own threads and grows on demand.
+    private static let worker = DispatchQueue(
+        label: "headless-spotify.process",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+
+    /// Run an executable, capturing output. No shell involved. `timeout` kills
+    /// a hung child (exitCode 124) instead of blocking forever — osascript
+    /// against a half-launched app can otherwise block indefinitely.
+    public static func run(_ executable: String, _ args: [String], timeout: TimeInterval = 60) async -> ProcessResult {
+        await withCheckedContinuation { continuation in
+            worker.async {
+                continuation.resume(returning: blockingRun(executable, args, timeout: timeout))
+            }
+        }
+    }
+
+    /// The blocking body. Only ever reached from `worker`, never from a
+    /// cooperative thread.
+    private static func blockingRun(_ executable: String, _ args: [String], timeout: TimeInterval) -> ProcessResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args

@@ -298,15 +298,15 @@ struct WatcherTests {
 @Suite("Injector helpers")
 struct InjectorTests {
     @Test("hardened runtime detected from codesign output")
-    func hardenedDetected() {
+    func hardenedDetected() async {
         let hardened: SpotifyScripting.Runner = { _, _, _ in
             ProcessResult(exitCode: 0, stdout: "", stderr: "Identifier=com.spotify.client\nflags=0x10000(runtime) hashes=2551+7 location=embedded\n")
         }
-        #expect(Injector.isHardenedRuntime(appPath: "/Applications/Spotify.app", run: hardened))
+        #expect(await Injector.isHardenedRuntime(appPath: "/Applications/Spotify.app", run: hardened))
         let plain: SpotifyScripting.Runner = { _, _, _ in
             ProcessResult(exitCode: 0, stdout: "", stderr: "Identifier=com.example.Fixture\nflags=0x0(none) hashes=1+1 location=embedded\n")
         }
-        #expect(!Injector.isHardenedRuntime(appPath: "/tmp/Fixture.app", run: plain))
+        #expect(await !Injector.isHardenedRuntime(appPath: "/tmp/Fixture.app", run: plain))
     }
 
     /// Run `body` with HEADLESS_INJECTOR_DYLIB removed (parallel-safe).
@@ -447,18 +447,18 @@ struct ControlTests {
     }
 
     @Test("perform sends the script, exit 0")
-    func performOk() {
+    func performOk() async {
         let calls = Calls()
-        let (code, line) = Control.perform(.next, run: makeRun(calls: calls))
+        let (code, line) = await Control.perform(.next, run: makeRun(calls: calls))
         #expect(code == 0)
         #expect(calls.scripts == ["tell application \"Spotify\" to next track"])
         #expect(line == "next: ok")
     }
 
     @Test("volume-up reads then writes")
-    func volumeUpTwoStep() {
+    func volumeUpTwoStep() async {
         let calls = Calls()
-        let (code, line) = Control.perform(.volumeUp, run: makeRun(calls: calls))
+        let (code, line) = await Control.perform(.volumeUp, run: makeRun(calls: calls))
         #expect(code == 0)
         // get → set → confirm re-read
         #expect(calls.scripts.count == 3)
@@ -467,30 +467,30 @@ struct ControlTests {
     }
 
     @Test("not running refuses without launching")
-    func notRunningGate() {
+    func notRunningGate() async {
         let calls = Calls()
         let run: SpotifyScripting.Runner = { exe, _, _ in
             if exe.hasSuffix("pgrep") { return ProcessResult(exitCode: 1, stdout: "", stderr: "") }
             calls.scripts.append(exe)
             return ProcessResult(exitCode: 0, stdout: "", stderr: "")
         }
-        let (code, _) = Control.perform(.play, run: run)
+        let (code, _) = await Control.perform(.play, run: run)
         #expect(code == 1)
         #expect(!calls.scripts.contains(where: { $0.contains("osascript") }))
     }
 
     @Test("set-volume without value is usage error")
-    func setVolumeNeedsValue() {
+    func setVolumeNeedsValue() async {
         let calls = Calls()
-        let (code, _) = Control.perform(.setVolume, run: makeRun(calls: calls))
+        let (code, _) = await Control.perform(.setVolume, run: makeRun(calls: calls))
         #expect(code == 2)
         #expect(calls.scripts.isEmpty)
     }
 
     @Test("Runner.control rejects missing action")
-    func runnerMissingAction() {
+    func runnerMissingAction() async {
         let errors = RunnerDryRunTests.Lines()
-        let code = Runner.control(
+        let code = await Runner.control(
             Invocation(subcommand: .control),
             output: { _ in }, errorOutput: { errors.values.append($0) }
         )
@@ -501,15 +501,15 @@ struct ControlTests {
 @Suite("ProcessRunner")
 struct ProcessRunnerTests {
     @Test("hung child is killed after timeout")
-    func timeoutKills() {
-        let result = ProcessRunner.run("/bin/sleep", ["30"], timeout: 1)
+    func timeoutKills() async {
+        let result = await ProcessRunner.run("/bin/sleep", ["30"], timeout: 1)
         #expect(result.timedOut)
         #expect(result.exitCode == 124)
     }
 
     @Test("fast child unaffected")
-    func fastChild() {
-        let result = ProcessRunner.run("/bin/echo", ["hi"], timeout: 10)
+    func fastChild() async {
+        let result = await ProcessRunner.run("/bin/echo", ["hi"], timeout: 10)
         #expect(!result.timedOut)
         #expect(result.exitCode == 0)
         #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "hi")
@@ -523,20 +523,20 @@ struct ScriptingTests {
     }
 
     @Test("not running short-circuits osascript")
-    func notRunningShortCircuits() {
+    func notRunningShortCircuits() async {
         let box = Box()
         let run: SpotifyScripting.Runner = { exe, args, _ in
             box.calls.append(exe + " " + args.joined(separator: " "))
             if exe.hasSuffix("pgrep") { return ProcessResult(exitCode: 1, stdout: "", stderr: "") }
             return ProcessResult(exitCode: 0, stdout: "playing\n", stderr: "")
         }
-        #expect(SpotifyScripting.isSpotifyRunning(run: run) == false)
-        #expect(SpotifyScripting.playerState(run: run) == nil)
+        #expect(await SpotifyScripting.isSpotifyRunning(run: run) == false)
+        #expect(await SpotifyScripting.playerState(run: run) == nil)
         #expect(!box.calls.contains(where: { $0.contains("osascript") }))
     }
 
     @Test("waitForScripting polls until answered")
-    func pollsUntilAnswered() {
+    func pollsUntilAnswered() async {
         let box = Box()
         let run: SpotifyScripting.Runner = { exe, _, _ in
             if exe.hasSuffix("pgrep") { return ProcessResult(exitCode: 0, stdout: "123\n", stderr: "") }
@@ -544,7 +544,7 @@ struct ScriptingTests {
             if box.n < 3 { return ProcessResult(exitCode: 1, stdout: "", stderr: "not running") }
             return ProcessResult(exitCode: 0, stdout: "paused\n", stderr: "")
         }
-        let state = SpotifyScripting.waitForScripting(timeout: 10, pollInterval: 0, run: run, sleep: { _ in })
+        let state = await SpotifyScripting.waitForScripting(timeout: 10, pollInterval: 0, run: run, sleep: { _ in })
         #expect(state == "paused")
         #expect(box.n == 3)
     }
@@ -899,7 +899,7 @@ struct StaleBackupTests {
     }
 
     @Test("safe restore keeps the new version's keys and drops our key")
-    func safeRestore() throws {
+    func safeRestore() async throws {
         let app = try makeUpdatedWhileHidden()
         let plist = SpotifyPlist(appPath: app)
         try plist.removeLSUIElementOnly()
@@ -1001,7 +1001,7 @@ struct ProcessRunnerOutputTests {
     /// A child that writes far more than a pipe buffer (~64 KB) before exiting.
     /// Reading the pipe only after exit would hang until the timeout.
     @Test("large stdout is drained, not deadlocked")
-    func largeStdout() {
+    func largeStdout() async {
         let script = """
             import Foundation
             let chunk = String(repeating: "x", count: 65_536)
@@ -1012,24 +1012,46 @@ struct ProcessRunnerOutputTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         // Compile once with the CLT-available swift, then run the produced binary.
         let binary = dir.deletingPathExtension()
-        let compile = ProcessRunner.run("/usr/bin/xcrun", ["swiftc", "-O", dir.path, "-o", binary.path], timeout: 180)
+        let compile = await ProcessRunner.run("/usr/bin/xcrun", ["swiftc", "-O", dir.path, "-o", binary.path], timeout: 180)
         guard compile.exitCode == 0 else {
             Issue.record("could not compile chatty fixture: \(compile.stderr)")
             return
         }
-        let result = ProcessRunner.run(binary.path, [], timeout: 30)
+        let result = await ProcessRunner.run(binary.path, [], timeout: 30)
         #expect(result.exitCode == 0)
         #expect(!result.timedOut, "a chatty child must not hit the timeout")
         #expect(result.stdout.utf8.count == 8 * 65_536)
     }
 
     @Test("output produced before a timeout is still reported")
-    func partialOutputOnTimeout() {
+    func partialOutputOnTimeout() async {
         // Writes a line, then sleeps past the timeout.
-        let result = ProcessRunner.run("/bin/sh", ["-c", "echo started; sleep 30"], timeout: 1.5)
+        let result = await ProcessRunner.run("/bin/sh", ["-c", "echo started; sleep 30"], timeout: 1.5)
         #expect(result.timedOut)
         #expect(result.exitCode == 124)
         #expect(result.stdout.contains("started"), "partial output must not be thrown away")
+    }
+
+    /// Regression: waiting on a child must not block a *cooperative* thread.
+    /// The pool is sized to the core count, so enough concurrent children used
+    /// to occupy every thread and deadlock the whole test run. This ran far
+    /// more children than any machine has cores and must still finish.
+    @Test("many concurrent children do not exhaust the cooperative pool")
+    func concurrentChildrenDoNotStarveThePool() async {
+        let count = 40
+        let results = await withTaskGroup(of: Bool.self, returning: [Bool].self) { group in
+            for i in 0..<count {
+                group.addTask {
+                    let r = await ProcessRunner.run("/bin/echo", ["child-\(i)"], timeout: 30)
+                    return r.exitCode == 0 && r.stdout.contains("child-\(i)")
+                }
+            }
+            var collected: [Bool] = []
+            for await ok in group { collected.append(ok) }
+            return collected
+        }
+        #expect(results.count == count)
+        #expect(results.allSatisfy { $0 }, "every concurrent child must return its own output")
     }
 }
 
@@ -1087,5 +1109,47 @@ struct AgentPlistEscapingTests {
         #expect(args.contains(nasty))
         let paths = try #require(obj["WatchPaths"] as? [String])
         #expect(paths == ["\(nasty)/Contents/Info.plist"])
+    }
+}
+
+@Suite("restore does not disturb an untouched Spotify")
+struct RestoreNoOpTests {
+    func untouchedFixture() throws -> String {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headless-noop-\(UUID().uuidString)")
+        let contents = dir.appendingPathComponent("Spotify.app/Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist = SpotifyPlist(appPath: dir.appendingPathComponent("Spotify.app").path)
+        try PropertyListSerialization
+            .data(fromPropertyList: ["CFBundleIdentifier": "com.spotify.client"], format: .xml, options: 0)
+            .write(to: plist.infoPlistURL)
+        return plist.appPath
+    }
+
+    @Test("a restore with nothing to undo returns success and says so")
+    func noOpRestore() async throws {
+        let app = try untouchedFixture()
+        let lines = RunnerDryRunTests.Lines()
+        let code = await Runner.run(
+            Invocation(subcommand: .restore, spotifyAppPath: app),
+            output: { lines.values.append($0) }, errorOutput: { _ in }
+        )
+        #expect(code == 0)
+        let text = lines.values.joined(separator: "\n")
+        #expect(text.contains("nothing to change"), "got: \(text)")
+        #expect(text.contains("left Spotify running untouched"), "must not relaunch")
+    }
+
+    @Test("a real restore still reports the relaunch")
+    func realRestore() async throws {
+        let app = try untouchedFixture()
+        let plist = SpotifyPlist(appPath: app)
+        try plist.setLSUIElement(true)
+        let lines = RunnerDryRunTests.Lines()
+        _ = await Runner.run(
+            Invocation(subcommand: .restore, spotifyAppPath: app, skipRelaunch: true),
+            output: { lines.values.append($0) }, errorOutput: { _ in }
+        )
+        #expect(lines.values.joined().contains("original Info.plist"))
     }
 }

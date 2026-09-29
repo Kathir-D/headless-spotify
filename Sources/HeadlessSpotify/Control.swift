@@ -46,10 +46,10 @@ public enum Control: Sendable {
         }
     }
 
-    public static func getVolume(run: SpotifyScripting.Runner = ProcessRunner.run) -> Int? {
-        guard SpotifyScripting.isSpotifyRunning(run: run) else { return nil }
+    public static func getVolume(run: SpotifyScripting.Runner = ProcessRunner.run) async -> Int? {
+        guard await SpotifyScripting.isSpotifyRunning(run: run) else { return nil }
         guard let script = script(for: .volume) else { return nil }
-        let result = run("/usr/bin/osascript", ["-e", script], 15)
+        let result = await run("/usr/bin/osascript", ["-e", script], 15)
         guard result.exitCode == 0 else { return nil }
         return Int(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
     }
@@ -59,14 +59,14 @@ public enum Control: Sendable {
         _ action: ControlAction,
         value: Int? = nil,
         run: SpotifyScripting.Runner = ProcessRunner.run
-    ) -> (Int32, String) {
-        guard SpotifyScripting.isSpotifyRunning(run: run) else {
+    ) async -> (Int32, String) {
+        guard await SpotifyScripting.isSpotifyRunning(run: run) else {
             return (1, "control: Spotify is not running — refusing to launch it (open Spotify or run `hide`/`restore`).")
         }
         let script: String?
         switch action {
         case .volumeUp, .volumeDown:
-            guard let current = getVolume(run: run) else {
+            guard let current = await getVolume(run: run) else {
                 return (1, "control: could not read current volume.")
             }
             script = self.script(for: action, currentVolume: current)
@@ -77,7 +77,7 @@ public enum Control: Sendable {
             script = self.script(for: action)
         }
         guard let script else { return (2, "control: could not build script for \(action.rawValue).") }
-        let result = run("/usr/bin/osascript", ["-e", script], 15)
+        let result = await run("/usr/bin/osascript", ["-e", script], 15)
         if result.exitCode != 0 {
             let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             return (1, "control: \(action.rawValue) failed\(detail.isEmpty ? "" : ": \(detail)").")
@@ -86,7 +86,7 @@ public enum Control: Sendable {
         case .volume:
             return (0, result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
         case .setVolume, .volumeUp, .volumeDown:
-            return (0, "volume: \(getVolume(run: run).map(String.init) ?? "?")")
+            return (0, "volume: \(await getVolume(run: run).map(String.init) ?? "?")")
         default:
             return (0, "\(action.rawValue): ok")
         }

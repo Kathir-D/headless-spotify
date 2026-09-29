@@ -31,7 +31,7 @@ public enum Runner {
         case .watch:
             return await watch(invocation, output: output, errorOutput: errorOutput)
         case .control:
-            return control(invocation, output: output, errorOutput: errorOutput)
+            return await control(invocation, output: output, errorOutput: errorOutput)
         case .none:
             output(CLI.helpText)
             return 0
@@ -61,9 +61,9 @@ public enum Runner {
         let plist = SpotifyPlist(appPath: appPath)
         let installed = plist.appExists && plist.plistExists
         let lsui: Bool? = installed ? (try? plist.readLSUIElement()) : nil
-        let running = SpotifyScripting.isSpotifyRunning(run: run)
+        let running = await SpotifyScripting.isSpotifyRunning(run: run)
         let dock = await SpotifyState.dockPresence()
-        let player = running ? SpotifyScripting.playerState(run: run) : nil
+        let player = running ? await SpotifyScripting.playerState(run: run) : nil
         return StatusReport(
             appPath: appPath,
             installed: installed,
@@ -187,7 +187,7 @@ public enum Runner {
             }
             if !inv.noResign {
                 output("hide: ad-hoc re-signing (required on Apple Silicon; `restore` brings the original signature back)…")
-                let result = SpotifyScripting.resignAdHoc(appPath: inv.spotifyAppPath)
+                let result = await SpotifyScripting.resignAdHoc(appPath: inv.spotifyAppPath)
                 if result.exitCode != 0 {
                     errorOutput("hide: re-sign failed (continuing anyway): \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
                 }
@@ -207,7 +207,7 @@ public enum Runner {
                     errorOutput("hide: injector dylib not found — pass --injector <path> or install it (sudo ./install.sh)")
                     return 1
                 }
-                warnIfHardened(appPath: inv.spotifyAppPath, output: output)
+                await warnIfHardened(appPath: inv.spotifyAppPath, output: output)
                 return await relaunchAndVerify(inv, output: output, errorOutput: errorOutput, useInjector: dylib)
             case .auto:
                 let code = await relaunchAndVerify(inv, output: output, errorOutput: errorOutput, useInjector: nil)
@@ -218,7 +218,7 @@ public enum Runner {
                     return code
                 }
                 output("hide: plist mode insufficient — falling back to injector (\(dylib))…")
-                warnIfHardened(appPath: inv.spotifyAppPath, output: output)
+                await warnIfHardened(appPath: inv.spotifyAppPath, output: output)
                 _ = await SpotifyState.terminate()
                 return await relaunchAndVerify(inv, output: output, errorOutput: errorOutput, useInjector: dylib)
             }
@@ -227,8 +227,8 @@ public enum Runner {
         return 0
     }
 
-    static func warnIfHardened(appPath: String, output: @Sendable (String) -> Void) {
-        if Injector.isHardenedRuntime(appPath: appPath) {
+    static func warnIfHardened(appPath: String, output: @Sendable (String) -> Void) async {
+        if await Injector.isHardenedRuntime(appPath: appPath) {
             output("hide: note — Spotify is hardened-runtime, which strips DYLD_* vars; the injector is likely ignored and plist mode stays primary.")
         }
     }
@@ -252,7 +252,7 @@ public enum Runner {
             return 1
         }
         output("hide: waiting for AppleScript (≤\(Int(inv.timeout))s)…")
-        guard let state = SpotifyScripting.waitForScripting(timeout: inv.timeout) else {
+        guard let state = await SpotifyScripting.waitForScripting(timeout: inv.timeout) else {
             errorOutput("hide: Spotify did not answer AppleScript within \(Int(inv.timeout))s")
             errorOutput("hide: hiding failed — run `headless-spotify restore --spotify-app \(inv.spotifyAppPath)` to return Spotify to normal.")
             errorOutput("hide: note — Spotify ≥1.3.1 exits on launch when LSUIElement=true is present (verified 2026-09-28); plist mode is blocked on current Spotify.")
@@ -268,13 +268,13 @@ public enum Runner {
 
     // MARK: - control (media passthrough)
 
-    /// Synchronous: no AppKit, only bounded osascript calls.
+    /// Async because every Spotify probe is a bounded osascript/pgrep call.
     static func control(
         _ inv: Invocation,
         output: @Sendable (String) -> Void,
         errorOutput: @Sendable (String) -> Void,
         run: SpotifyScripting.Runner = ProcessRunner.run
-    ) -> Int32 {
+    ) async -> Int32 {
         guard let action = inv.controlAction else {
             errorOutput("control: missing action — try 'headless-spotify control play|pause|toggle|next|previous|volume|set-volume N|volume-up|volume-down'.")
             return 2
@@ -283,7 +283,7 @@ public enum Runner {
             output("control plan: \(action.rawValue)\(inv.controlValue.map { " \($0)" } ?? "") via AppleScript (no Spotify launch).")
             return 0
         }
-        let (code, line) = Control.perform(action, value: inv.controlValue, run: run)
+        let (code, line) = await Control.perform(action, value: inv.controlValue, run: run)
         (code == 0 ? output : errorOutput)(line)
         return code
     }
@@ -301,10 +301,10 @@ public enum Runner {
             return 0
         }
         if inv.installAgent {
-            return installAgent(inv, output: output, errorOutput: errorOutput)
+            return await installAgent(inv, output: output, errorOutput: errorOutput)
         }
         if inv.uninstallAgent {
-            return uninstallAgent(output: output, errorOutput: errorOutput)
+            return await uninstallAgent(output: output, errorOutput: errorOutput)
         }
         if inv.dryRun {
             output("watch plan for \(inv.spotifyAppPath): every \(Int(inv.interval))s check Dock + LSUIElement + app version; re-apply hiding on drift.")
@@ -403,7 +403,7 @@ public enum Runner {
         _ inv: Invocation,
         output: @Sendable (String) -> Void,
         errorOutput: @Sendable (String) -> Void
-    ) -> Int32 {
+    ) async -> Int32 {
         let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
         let dest = AgentPlist.agentPlistPath(homeDirectory: home)
         let binary = CommandLine.arguments.first ?? "/usr/local/bin/headless-spotify"
@@ -419,9 +419,9 @@ public enum Runner {
             return 1
         }
         let domain = "gui/\(getuid())"
-        let boot = ProcessRunner.run("/bin/launchctl", ["bootout", domain, dest])
+        let boot = await ProcessRunner.run("/bin/launchctl", ["bootout", domain, dest])
         _ = boot // ignore: not loaded yet is fine
-        let load = ProcessRunner.run("/bin/launchctl", ["bootstrap", domain, dest])
+        let load = await ProcessRunner.run("/bin/launchctl", ["bootstrap", domain, dest])
         if load.exitCode != 0 {
             errorOutput("watch: bootstrap failed: \(load.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
             return 1
@@ -433,11 +433,11 @@ public enum Runner {
     static func uninstallAgent(
         output: @Sendable (String) -> Void,
         errorOutput: @Sendable (String) -> Void
-    ) -> Int32 {
+    ) async -> Int32 {
         let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
         let dest = AgentPlist.agentPlistPath(homeDirectory: home)
         let domain = "gui/\(getuid())"
-        _ = ProcessRunner.run("/bin/launchctl", ["bootout", domain, dest])
+        _ = await ProcessRunner.run("/bin/launchctl", ["bootout", domain, dest])
         if FileManager.default.fileExists(atPath: dest) {
             do {
                 try FileManager.default.removeItem(atPath: dest)
@@ -466,6 +466,7 @@ public enum Runner {
             output("restore plan for \(inv.spotifyAppPath): restore Info.plist backup (\(plist.hasBackup ? "present" : "absent")), relaunch normally, verify Dock visible.")
             return 0
         }
+        var changedSomething = false
         if !inv.skipPlist {
             guard plist.isWritable else {
                 errorOutput("restore: \(plist.infoPlistURL.path) is not writable — run `sudo ./uninstall.sh \(inv.spotifyAppPath)`")
@@ -473,13 +474,14 @@ public enum Runner {
             }
             do {
                 if plist.hasBackup {
+                    changedSomething = true
                     if plist.backupVersionMismatch() {
                         // Spotify auto-updated while hidden. Copying the old
                         // Info.plist back could strip keys the new version
                         // needs, so only drop the key we added.
                         try plist.removeLSUIElementOnly()
                         output("restore: Spotify updated while hidden — removed only the LSUIElement key (stale backup not applied)")
-                        let resign = SpotifyScripting.resignAdHoc(appPath: inv.spotifyAppPath)
+                        let resign = await SpotifyScripting.resignAdHoc(appPath: inv.spotifyAppPath)
                         if resign.exitCode != 0 {
                             errorOutput("restore: warning — ad-hoc re-sign failed: \(resign.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
                         } else {
@@ -491,10 +493,11 @@ public enum Runner {
                         output("restore: original Info.plist (+ seal) restored, backup removed")
                     }
                 } else if (try? plist.readLSUIElement()) == true {
+                    changedSomething = true
                     try plist.setLSUIElement(nil, backupFirst: true)
                     output("restore: no backup found — removed LSUIElement key (a backup of the edited plist was kept)")
                 } else {
-                    output("restore: already in normal mode (LSUIElement absent)")
+                    output("restore: already in normal mode (LSUIElement absent) — nothing to change")
                 }
             } catch {
                 errorOutput("restore: plist restore failed: \(error)")
@@ -502,12 +505,18 @@ public enum Runner {
             }
             // Never ad-hoc resign here: restoring the original files brings
             // back Apple's own signature. Verify and report.
-            let verify = SpotifyScripting.verifySignature(appPath: inv.spotifyAppPath)
+            let verify = await SpotifyScripting.verifySignature(appPath: inv.spotifyAppPath)
             if verify.exitCode == 0 {
                 output("restore: code signature verifies (original Apple signature)")
             } else {
                 errorOutput("restore: WARNING — signature does not verify; reinstall Spotify if it refuses to launch.")
             }
+        }
+        if !inv.skipRelaunch, !changedSomething, !inv.skipPlist {
+            // Nothing was hidden, so there is no reason to restart Spotify.
+            let presence = await SpotifyState.dockPresence()
+            output("restore: left Spotify running untouched (Dock: \(presence.rawValue))")
+            return 0
         }
         if !inv.skipRelaunch {
             if await SpotifyState.runningApp() != nil {
@@ -520,7 +529,7 @@ public enum Runner {
                 errorOutput("restore: relaunch failed: \(error)")
                 return 1
             }
-            let state = SpotifyScripting.waitForScripting(timeout: inv.timeout) ?? "unknown"
+            let state = await SpotifyScripting.waitForScripting(timeout: inv.timeout) ?? "unknown"
             let presence = await SpotifyState.dockPresence()
             output("restore: done — player state: \(state), Dock: \(presence.rawValue)")
             return presence == .visible ? 0 : 1
