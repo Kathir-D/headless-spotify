@@ -20,8 +20,8 @@
 # (.github/workflows/release.yml) on every `v*` tag, which also copies this
 # file into the Kathir-D/homebrew-tap tap — do not hand-edit them.
 cask "headless-spotify" do
-  version "0.1.0-beta.2"
-  sha256 "eca00778f2e04c08d34bebfc39209ba1c4e8bcd13b8b69723c9f667f4113ad92"
+  version "0.1.0-beta.3"
+  sha256 "2430b62084e3e1c2a116f68e27cbda630e2f0de9d6b4d07e45371ea10054189b"
 
   url "https://github.com/Kathir-D/headless-spotify/releases/download/v#{version}/headless-spotify-#{version}-macos.tar.gz"
   name "headless-spotify"
