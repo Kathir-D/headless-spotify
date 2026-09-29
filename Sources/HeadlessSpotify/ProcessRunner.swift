@@ -37,21 +37,43 @@ public enum ProcessRunner: Sendable {
         } catch {
             return ProcessResult(exitCode: 127, stdout: "", stderr: "\(error)")
         }
+
+        // Drain both pipes concurrently while the child runs. Reading them
+        // only after it exits deadlocks: a pipe holds ~64 KB, so a chatty
+        // child (`codesign --deep`, a long osascript error) blocks in write()
+        // and never exits. Partial output is still reported on timeout.
+        let group = DispatchGroup()
+        var outData = Data()
+        var errData = Data()
+        let collector = DispatchQueue(label: "headless-spotify.process-output", attributes: .concurrent)
+        collector.async(group: group) { outData = outPipe.fileHandleForReading.readDataToEndOfFile() }
+        collector.async(group: group) { errData = errPipe.fileHandleForReading.readDataToEndOfFile() }
+
         let deadline = Date().addingTimeInterval(timeout)
+        var timedOut = false
         while process.isRunning {
             if Date() > deadline {
+                timedOut = true
                 process.terminate()
                 Thread.sleep(forTimeInterval: 0.5)
                 if process.isRunning {
                     // terminate() is polite; kill() is final (SIGKILL = 9).
                     kill(process.processIdentifier, 9)
                 }
-                return ProcessResult(exitCode: 124, stdout: "", stderr: "timed out after \(Int(timeout))s: \(executable) \(args.joined(separator: " "))", timedOut: true)
+                break
             }
             Thread.sleep(forTimeInterval: 0.05)
         }
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        // The readers finish once the write ends are closed.
+        group.wait()
+        if timedOut {
+            return ProcessResult(
+                exitCode: 124,
+                stdout: String(data: outData, encoding: .utf8) ?? "",
+                stderr: "timed out after \(Int(timeout))s: \(executable) \(args.joined(separator: " "))",
+                timedOut: true
+            )
+        }
         return ProcessResult(
             exitCode: process.terminationStatus,
             stdout: String(data: outData, encoding: .utf8) ?? "",

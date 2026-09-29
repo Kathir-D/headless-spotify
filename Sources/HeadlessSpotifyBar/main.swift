@@ -50,22 +50,43 @@ final class MenuController: NSObject, NSMenuDelegate {
     private var cli: String?
     private var isBusy = false
     private var message: String?
+    private weak var button: NSStatusBarButton?
 
     func attach(to statusItem: NSStatusItem) {
         menu.delegate = self
+        button = statusItem.button
         rebuild()
         statusItem.menu = menu
     }
 
-    /// Recompute state every time the menu opens, so the label always reflects
-    /// reality (including changes made from the terminal or the watcher).
+    /// Recompute state every time the menu opens, so the label and the icon
+    /// always reflect reality (including changes made from the terminal or
+    /// the watcher).
     func menuWillOpen(_ menu: NSMenu) {
         cli = cliPath()
         message = nil
         rebuild()
     }
 
+    /// Keep the top-bar icon in step with the state, so hiding is visible
+    /// without opening the menu.
+    private func refreshIcon(hidingEnabled: Bool) {
+        guard let button else { return }
+        let symbol = MenuBarModel.iconSymbolName(hidingEnabled: hidingEnabled)
+        if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: MenuBarModel.projectName) {
+            image.isTemplate = true
+            button.image = image
+        } else {
+            // A missing SF Symbol must still show something recognisable.
+            button.image = nil
+            button.title = hidingEnabled ? "HS" : "S"
+        }
+        button.toolTip = MenuBarModel.tooltip(hidingEnabled: hidingEnabled)
+    }
+
     private func rebuild() {
+        let hiding = currentHidingState()
+        refreshIcon(hidingEnabled: hiding)
         menu.removeAllItems()
         for spec in MenuBarModel.menuItems(
             version: appVersion,
@@ -91,6 +112,11 @@ final class MenuController: NSObject, NSMenuDelegate {
                 item.keyEquivalent = "q"
             }
             item.isEnabled = spec.isEnabled
+            item.state = switch spec.state {
+            case .none: .off
+            case .on: .on
+            case .off: .off
+            }
             menu.addItem(item)
         }
     }
@@ -118,12 +144,14 @@ final class MenuController: NSObject, NSMenuDelegate {
             DispatchQueue.main.async {
                 self?.isBusy = false
                 self?.message = result.succeeded ? nil : MenuBarModel.statusMessage(result.output)
-                self?.rebuild()
+                self?.rebuild()  // also refreshes the icon for the new state
             }
         }
     }
 
-    /// Run commands in order, stopping at the first failure.
+    /// Run commands in order, stopping at the first failure. Output is drained
+    /// while the child runs: reading the pipe only after it exits deadlocks on
+    /// a chatty child, and `hide` is not a quiet command.
     nonisolated static func run(_ commands: [CommandSpec]) -> (succeeded: Bool, output: String) {
         for command in commands {
             let process = Process()
@@ -163,8 +191,11 @@ if CommandLine.arguments.contains("--print-menu-spec") {
         if item.isSeparator {
             print("---")
         } else {
+            // Mirror the menu: a tick for a checked row, "informational" for a
+            // greyed one, so the state is verifiable without a GUI.
+            let tick = item.state == .on ? "\u{2713} " : ""
             let suffix = item.isEnabled ? "" : "  (informational)"
-            print("\(item.title)\(suffix)")
+            print("\(tick)\(item.title)\(suffix)")
         }
     }
     exit(0)
@@ -182,16 +213,7 @@ let application = NSApplication.shared
 application.setActivationPolicy(.accessory)
 
 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-if let button = statusItem.button {
-    let image = NSImage(
-        systemSymbolName: MenuBarModel.iconSymbolName,
-        accessibilityDescription: MenuBarModel.projectName
-    )
-    image?.isTemplate = true
-    button.image = image
-    button.toolTip = MenuBarModel.projectName
-}
-
-MenuController().attach(to: statusItem)
+let controller = MenuController()
+controller.attach(to: statusItem)
 
 application.run()

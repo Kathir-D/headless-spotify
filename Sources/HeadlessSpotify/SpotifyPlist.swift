@@ -154,7 +154,22 @@ public struct SpotifyPlist: Sendable {
             dict.removeValue(forKey: "LSUIElement")
         }
         let out = try PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
+        // An atomic write replaces the file, and the replacement inherits the
+        // process umask — which can turn a world-readable root-owned
+        // Info.plist into a 0600 one and break LaunchServices. Put the
+        // bundle's own mode/ownership back.
+        let original = try? FileManager.default.attributesOfItem(atPath: infoPlistURL.path)
         try out.write(to: infoPlistURL, options: .atomic)
+        if let original {
+            var restore: [FileAttributeKey: Any] = [:]
+            for key in [FileAttributeKey.posixPermissions, .ownerAccountID, .groupOwnerAccountID] {
+                if let value = original[key] { restore[key] = value }
+            }
+            if !restore.isEmpty {
+                // Needs privileges to change ownership; safe to skip when not root.
+                try? FileManager.default.setAttributes(restore, ofItemAtPath: infoPlistURL.path)
+            }
+        }
     }
 
     /// True when the backup was taken from a different Spotify version than

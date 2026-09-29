@@ -197,12 +197,17 @@ Match by `bundleID == com.spotify.client`, never by Dock or window presence.
 ```
 headless-spotify 0.1.0        (greyed out)
 ──────────────────────────
-Disable hiding               ← or "Enable hiding"
+✓ Hidden from Dock            ← ticked while Spotify is out of the Dock
 ──────────────────────────
 Quit headless-spotify
 ```
 
-- The toggle label follows the real state and is recomputed every time you open the menu, so it never lies — even if you change things from the terminal or the watcher does.
+The row is a **state**, not an action: it is ticked exactly when Spotify is hidden, and clicking it
+flips that. The menu bar icon follows the same state — a crossed-out eye while hidden, a music
+note while Spotify shows in the Dock — so you never have to open the menu to know, and never have
+to quit anything.
+
+- The tick and the icon follow the real state and are recomputed every time the menu opens, so they never lie — even if you change things from the terminal or the watcher does.
 - It drives the `headless-spotify` binary (`hide` / `restore`) rather than reimplementing it, so the menu and the CLI can never disagree. If the binary isn't found (e.g. you copied only the `.app`), the row reads `headless-spotify CLI not found`.
 - On the usual root-owned `/Applications/Spotify.app`, enabling asks for your password once: the plist edit + re-sign runs as root, the relaunch still runs as you, so Spotify keeps your session. Hiding takes a while (deep re-sign + a scripting wait), so the row shows `Working…` and cannot be double-clicked.
 - If a toggle fails, its first line of output appears as a greyed row until you reopen the menu.
@@ -324,7 +329,7 @@ changes.
 
 ```sh
 swift build          # CLI + injector dylib + menu bar extra (Command Line Tools are enough)
-swift test           # 77 tests in 19 suites, all offline-safe (fixtures, stubbed runners)
+swift test           # 84 tests in 22 suites, all offline-safe (fixtures, stubbed runners)
 ./scripts/smoke-test.sh            # pre-release gate (pass --live to exercise real media controls)
 ./scripts/build-menubar.sh          # menu bar app bundle (debug: CONFIG=debug)
 ./scripts/package-release.sh       # versioned tarball + SHA256SUMS.txt (see VERSION)

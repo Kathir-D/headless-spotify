@@ -16,7 +16,11 @@ public enum AgentPlist: Sendable {
     /// KeepAlive daemon running `watch`; WatchPaths re-fires right after a
     /// Spotify self-update rewrites Info.plist.
     public static func contents(binaryPath: String, spotifyAppPath: String, interval: TimeInterval) -> String {
-        """
+        // A path containing & or < would otherwise produce a plist that
+        // LaunchServices refuses to parse, taking the watcher with it.
+        let binary = escape(binaryPath)
+        let app = escape(spotifyAppPath)
+        return """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
@@ -25,12 +29,12 @@ public enum AgentPlist: Sendable {
             <string>\(label)</string>
             <key>ProgramArguments</key>
             <array>
-                <string>\(binaryPath)</string>
+                <string>\(binary)</string>
                 <string>watch</string>
                 <string>--interval</string>
                 <string>\(Int(interval))</string>
                 <string>--spotify-app</string>
-                <string>\(spotifyAppPath)</string>
+                <string>\(app)</string>
             </array>
             <key>RunAtLoad</key>
             <true/>
@@ -40,7 +44,7 @@ public enum AgentPlist: Sendable {
             <integer>30</integer>
             <key>WatchPaths</key>
             <array>
-                <string>\(spotifyAppPath)/Contents/Info.plist</string>
+                <string>\(app)/Contents/Info.plist</string>
             </array>
             <key>StandardOutPath</key>
             <string>/tmp/headless-spotify-watcher.log</string>
@@ -50,5 +54,15 @@ public enum AgentPlist: Sendable {
         </plist>
 
         """
+    }
+
+    /// Escape the five XML entities so any path yields a parseable plist.
+    static func escape(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 }

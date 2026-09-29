@@ -16,6 +16,12 @@ LABEL="com.headless-spotify.watcher"
 
 need_root() { [ ! -w "$SPOTIFY_APP/Contents/Info.plist" ] && [ "$(id -u)" -ne 0 ]; }
 
+# Relaunching Spotify as root would start it in root's session, not yours.
+if [ "$(id -u)" -eq 0 ] && [ -z "${SUDO_USER:-}" ]; then
+  echo "uninstall must run via sudo (as you), not as root directly, so Spotify relaunches for your user." >&2
+  exit 1
+fi
+
 if [ ! -d "$SPOTIFY_APP" ]; then
   echo "error: Spotify not found at $SPOTIFY_APP" >&2
   exit 1
@@ -80,5 +86,7 @@ if [ -d /usr/local/lib/headless-spotify ] && [ -w /usr/local/lib/headless-spotif
 elif [ -d /usr/local/lib/headless-spotify ]; then
   echo "keeping /usr/local/lib/headless-spotify (not writable — remove with sudo)"
 fi
+
+rm -f /tmp/headless-spotify-watcher.log 2>/dev/null || true
 
 echo "done: Spotify Dock icon restored."

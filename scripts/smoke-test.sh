@@ -19,8 +19,21 @@ check() { # check <name> <command...>
 }
 
 echo "== build + unit tests =="
-swift build 2>&1 | tail -1
-swift test 2>&1 | tail -1
+# These are the gate: pipe-into-tail would hide a failure behind tail's exit 0.
+BUILD_LOG="$(mktemp)"
+TEST_LOG="$(mktemp)"
+if swift build >"$BUILD_LOG" 2>&1; then
+  echo "ok: swift build"; pass=$((pass + 1))
+else
+  echo "FAIL: swift build"; tail -5 "$BUILD_LOG"; fail=$((fail + 1))
+fi
+if swift test >"$TEST_LOG" 2>&1; then
+  echo "ok: swift test ($(grep -o 'Test run with [0-9]* tests' "$TEST_LOG" | tail -1))"
+  pass=$((pass + 1))
+else
+  echo "FAIL: swift test"; tail -20 "$TEST_LOG"; fail=$((fail + 1))
+fi
+rm -f "$BUILD_LOG" "$TEST_LOG"
 
 echo "== static checks =="
 sh -n install.sh && echo "ok: install.sh syntax"
@@ -47,10 +60,12 @@ BAR_SPEC="$(./.build/debug/headless-spotify-bar --print-menu-spec)"
 echo "$BAR_SPEC" | grep -q "headless-spotify" && echo "ok: menu names the project"
 echo "$BAR_SPEC" | grep -q "Quit headless-spotify" && echo "ok: menu offers Quit"
 # The toggle label must follow the hiding state, in both directions.
-./.build/debug/headless-spotify-bar --print-menu-spec --hiding-disabled | grep -q "Enable hiding" \
-  && echo "ok: toggle offers Enable when hiding is off"
-./.build/debug/headless-spotify-bar --print-menu-spec --hiding-enabled | grep -q "Disable hiding" \
-  && echo "ok: toggle offers Disable when hiding is on"
+./.build/debug/headless-spotify-bar --print-menu-spec --hiding-disabled | grep -q "Hidden from Dock" \
+  && echo "ok: toggle row is present when hiding is off"
+./.build/debug/headless-spotify-bar --print-menu-spec --hiding-enabled | grep -q "✓ Hidden from Dock" \
+  && echo "ok: toggle is ticked only while hiding is on"
+! ./.build/debug/headless-spotify-bar --print-menu-spec --hiding-disabled | grep -q "✓" \
+  && echo "ok: no tick while hiding is off"
 ! ./.build/debug/headless-spotify-bar --bogus >/dev/null 2>&1 && echo "ok: bar rejects unknown flags"
 MENUBAR_OUT="/tmp/smoke-menubar-$$"
 CONFIG=debug OUT_DIR="$MENUBAR_OUT" ./scripts/build-menubar.sh >/dev/null

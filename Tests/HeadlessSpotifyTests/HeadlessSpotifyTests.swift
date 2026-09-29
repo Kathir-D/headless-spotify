@@ -574,7 +574,8 @@ struct MenuBarModelTests {
     func identifiers() {
         #expect(MenuBarModel.projectName == "headless-spotify")
         #expect(MenuBarModel.quitTitle == "Quit headless-spotify")
-        #expect(!MenuBarModel.iconSymbolName.isEmpty)
+        #expect(!MenuBarModel.iconSymbolName(hidingEnabled: true).isEmpty)
+        #expect(!MenuBarModel.iconSymbolName(hidingEnabled: false).isEmpty)
     }
 }
 
@@ -606,10 +607,30 @@ struct WatcherBackoffTests {
 
 @Suite("Menu bar toggle")
 struct MenuBarToggleTests {
-    @Test("label flips with state")
-    func labelFlips() {
-        #expect(MenuBarModel.toggleTitle(hidingEnabled: true) == "Disable hiding")
-        #expect(MenuBarModel.toggleTitle(hidingEnabled: false) == "Enable hiding")
+    @Test("the row shows current state, with a checkmark")
+    func stateRow() {
+        for enabled in [true, false] {
+            let items = MenuBarModel.menuItems(version: "1.0", hidingEnabled: enabled)
+            #expect(items[2].title == "Hidden from Dock")
+            #expect(items[2].isToggle && items[2].isEnabled)
+            #expect(items[2].state == (enabled ? .on : .off), "checkmark must match reality")
+        }
+    }
+
+    @Test("one click flips the state it reported")
+    func clickFlipsState() {
+        // on -> the next action is restore, off -> hide.
+        #expect(ToggleAction(hidingEnabled: true) == .disable)
+        #expect(ToggleAction(hidingEnabled: false) == .enable)
+    }
+
+    @Test("icon and tooltip follow the state")
+    func iconFollowsState() {
+        #expect(MenuBarModel.iconSymbolName(hidingEnabled: true) == "eye.slash")
+        #expect(MenuBarModel.iconSymbolName(hidingEnabled: false) == "music.note")
+        #expect(MenuBarModel.iconSymbolName(hidingEnabled: true) != MenuBarModel.iconSymbolName(hidingEnabled: false))
+        #expect(MenuBarModel.tooltip(hidingEnabled: true).contains("hidden"))
+        #expect(MenuBarModel.tooltip(hidingEnabled: false).contains("shows"))
     }
 
     @Test("menu is name, toggle, Quit")
@@ -618,12 +639,9 @@ struct MenuBarToggleTests {
         #expect(off.count == 5)
         #expect(off[0].title == "headless-spotify 1.0" && !off[0].isEnabled)
         #expect(off[1].isSeparator)
-        #expect(off[2].isToggle && off[2].isEnabled)
-        #expect(off[2].title == "Enable hiding")
+        #expect(off[2].isToggle)
         #expect(off[3].isSeparator)
         #expect(off[4].isQuit && off[4].isEnabled)
-        let on = MenuBarModel.menuItems(version: "1.0", hidingEnabled: true)
-        #expect(on[2].title == "Disable hiding")
     }
 
     @Test("missing CLI disables the toggle instead of failing")
@@ -641,6 +659,7 @@ struct MenuBarToggleTests {
         #expect(items[2].title == MenuBarModel.busyTitle)
         #expect(!items[2].isEnabled)
         #expect(!items[2].isToggle)
+        #expect(items[2].state == .on, "still shows what is true while working")
     }
 
     @Test("last result shows as an informational row")
@@ -974,5 +993,99 @@ struct BundleGuardTests {
     func forceFlag() throws {
         #expect(try CLI.parse(["headless-spotify", "hide", "--force"]).get().force)
         #expect(try CLI.parse(["headless-spotify", "hide"]).get().force == false)
+    }
+}
+
+@Suite("ProcessRunner does not deadlock on chatty children")
+struct ProcessRunnerOutputTests {
+    /// A child that writes far more than a pipe buffer (~64 KB) before exiting.
+    /// Reading the pipe only after exit would hang until the timeout.
+    @Test("large stdout is drained, not deadlocked")
+    func largeStdout() {
+        let script = """
+            import Foundation
+            let chunk = String(repeating: "x", count: 65_536)
+            for _ in 0..<8 { FileHandle.standardOutput.write(Data(chunk.utf8)) }
+            """
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("chatty-\(UUID().uuidString).swift")
+        try? Data(script.utf8).write(to: dir)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Compile once with the CLT-available swift, then run the produced binary.
+        let binary = dir.deletingPathExtension()
+        let compile = ProcessRunner.run("/usr/bin/xcrun", ["swiftc", "-O", dir.path, "-o", binary.path], timeout: 180)
+        guard compile.exitCode == 0 else {
+            Issue.record("could not compile chatty fixture: \(compile.stderr)")
+            return
+        }
+        let result = ProcessRunner.run(binary.path, [], timeout: 30)
+        #expect(result.exitCode == 0)
+        #expect(!result.timedOut, "a chatty child must not hit the timeout")
+        #expect(result.stdout.utf8.count == 8 * 65_536)
+    }
+
+    @Test("output produced before a timeout is still reported")
+    func partialOutputOnTimeout() {
+        // Writes a line, then sleeps past the timeout.
+        let result = ProcessRunner.run("/bin/sh", ["-c", "echo started; sleep 30"], timeout: 1.5)
+        #expect(result.timedOut)
+        #expect(result.exitCode == 124)
+        #expect(result.stdout.contains("started"), "partial output must not be thrown away")
+    }
+}
+
+@Suite("Editing a bundle must not change its permissions")
+struct PlistWriteTests {
+    func fixture() throws -> String {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headless-perm-\(UUID().uuidString)")
+        let contents = dir.appendingPathComponent("Spotify.app/Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist = SpotifyPlist(appPath: dir.appendingPathComponent("Spotify.app").path)
+        try PropertyListSerialization
+            .data(fromPropertyList: ["CFBundleIdentifier": "com.spotify.client"], format: .xml, options: 0)
+            .write(to: plist.infoPlistURL)
+        return plist.appPath
+    }
+
+    @Test("file mode survives the edit")
+    func modePreserved() throws {
+        let app = try fixture()
+        let plist = SpotifyPlist(appPath: app)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: plist.infoPlistURL.path)
+        try plist.setLSUIElement(true)
+        let mode = try FileManager.default
+            .attributesOfItem(atPath: plist.infoPlistURL.path)[.posixPermissions] as? NSNumber
+        #expect(mode?.int16Value == 0o600, "an atomic write must not reset the bundle's mode")
+        #expect(try plist.readLSUIElement() == true, "and the edit must still have happened")
+    }
+
+    @Test("the usual 0644 mode is left alone")
+    func commonModePreserved() throws {
+        let app = try fixture()
+        let plist = SpotifyPlist(appPath: app)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: plist.infoPlistURL.path)
+        try plist.setLSUIElement(true)
+        let mode = try FileManager.default
+            .attributesOfItem(atPath: plist.infoPlistURL.path)[.posixPermissions] as? NSNumber
+        #expect(mode?.int16Value == 0o644)
+    }
+}
+
+@Suite("LaunchAgent plist is always parseable")
+struct AgentPlistEscapingTests {
+    @Test("paths with XML characters produce valid plist XML")
+    func escapesPaths() throws {
+        let nasty = "/Volumes/R&D/<Music>/Spotify \"Final\".app"
+        let text = AgentPlist.contents(binaryPath: "/usr/local/bin/headless & co", spotifyAppPath: nasty, interval: 15)
+        let data = try #require(text.data(using: .utf8))
+        var format = PropertyListSerialization.PropertyListFormat.xml
+        let obj = try #require(
+            PropertyListSerialization.propertyList(from: data, format: &format) as? [String: Any]
+        )
+        let args = try #require(obj["ProgramArguments"] as? [String])
+        #expect(args.first == "/usr/local/bin/headless & co")
+        #expect(args.contains(nasty))
+        let paths = try #require(obj["WatchPaths"] as? [String])
+        #expect(paths == ["\(nasty)/Contents/Info.plist"])
     }
 }

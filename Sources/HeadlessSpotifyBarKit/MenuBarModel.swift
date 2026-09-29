@@ -19,6 +19,14 @@ public enum MenuAction: Sendable, Equatable {
     case quit
 }
 
+/// Checkmark state of a menu row, so a toggle shows *what is true now*
+/// rather than only what a click would do.
+public enum MenuItemState: Sendable, Equatable {
+    case none
+    case on
+    case off
+}
+
 /// One row in the menu bar menu.
 public struct MenuItemSpec: Sendable, Equatable {
     /// Display text (ignored for separators).
@@ -27,17 +35,20 @@ public struct MenuItemSpec: Sendable, Equatable {
     /// false = informational row (greyed out, not clickable).
     public var isEnabled: Bool
     public var action: MenuAction
+    public var state: MenuItemState
 
     public init(
         title: String,
         isSeparator: Bool = false,
         isEnabled: Bool = true,
-        action: MenuAction = .none
+        action: MenuAction = .none,
+        state: MenuItemState = .none
     ) {
         self.title = title
         self.isSeparator = isSeparator
         self.isEnabled = isEnabled
         self.action = action
+        self.state = state
     }
 
     public var isQuit: Bool { action == .quit }
@@ -47,17 +58,27 @@ public struct MenuItemSpec: Sendable, Equatable {
 public enum MenuBarModel: Sendable {
     /// Shown in the menu and used as the status item's tooltip.
     public static let projectName = "headless-spotify"
-    /// SF Symbol drawn in the menu bar (template image, tints with the menu bar).
-    public static let iconSymbolName = "waveform"
+    /// Menu bar icon while Spotify is hidden from the Dock.
+    public static let hiddenIconSymbolName = "eye.slash"
+    /// Menu bar icon while Spotify is visible in the Dock.
+    public static let visibleIconSymbolName = "music.note"
     public static let quitTitle = "Quit \(projectName)"
-    public static let disableTitle = "Disable hiding"
-    public static let enableTitle = "Enable hiding"
+    /// The row states what is true now, not what clicking would do.
+    public static let toggleTitle = "Hidden from Dock"
     public static let busyTitle = "Working…"
     public static let cliMissingTitle = "\(projectName) CLI not found"
 
-    /// Toggle label for the current state.
-    public static func toggleTitle(hidingEnabled: Bool) -> String {
-        hidingEnabled ? disableTitle : enableTitle
+    /// Icon for the current state, so the top bar shows it without opening
+    /// the menu. A missing symbol falls back to the text title in the glue.
+    public static func iconSymbolName(hidingEnabled: Bool) -> String {
+        hidingEnabled ? hiddenIconSymbolName : visibleIconSymbolName
+    }
+
+    /// Tooltip for the current state.
+    public static func tooltip(hidingEnabled: Bool) -> String {
+        hidingEnabled
+            ? "\(projectName): Spotify is hidden from the Dock"
+            : "\(projectName): Spotify shows in the Dock"
     }
 
     /// One short line from a CLI result, for the informational status row.
@@ -91,11 +112,16 @@ public enum MenuBarModel: Sendable {
         if !cliAvailable {
             toggle = MenuItemSpec(title: cliMissingTitle, isEnabled: false)
         } else if busy {
-            toggle = MenuItemSpec(title: busyTitle, isEnabled: false)
+            toggle = MenuItemSpec(
+                title: busyTitle,
+                isEnabled: false,
+                state: hidingEnabled ? .on : .off
+            )
         } else {
             toggle = MenuItemSpec(
-                title: toggleTitle(hidingEnabled: hidingEnabled),
-                action: .toggleHiding
+                title: toggleTitle,
+                action: .toggleHiding,
+                state: hidingEnabled ? .on : .off
             )
         }
         var items: [MenuItemSpec] = [
@@ -147,6 +173,8 @@ public enum CLILocator: Sendable {
         }
         paths.append("/usr/local/bin/\(binaryName)")
         paths.append("/opt/homebrew/bin/\(binaryName)")
+        // Intel Homebrew, which many iMac/MacBook installs still use.
+        paths.append("/home/linuxbrew/.linuxbrew/bin/\(binaryName)")
         if let bar = barExecutablePath, !bar.isEmpty {
             let dir = URL(fileURLWithPath: bar).deletingLastPathComponent()
             paths.append(dir.appendingPathComponent(binaryName).standardized.path)
@@ -177,6 +205,11 @@ public enum ToggleAction: Sendable, Equatable {
     /// CLI subcommand for this direction.
     public var subcommand: String {
         self == .enable ? "hide" : "restore"
+    }
+
+    /// The direction a toggle click should go, given the current state.
+    public init(hidingEnabled: Bool) {
+        self = hidingEnabled ? .disable : .enable
     }
 }
 

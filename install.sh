@@ -36,16 +36,24 @@ if [ ! -d "$SPOTIFY_APP" ]; then
 fi
 
 # 1. CLI binary: explicit HEADLESS_BIN wins, then a tarball-layout bin/ next
-#    to this script, then a source-tree release build, then build from source.
-#    (Multi-arch `swift build` products live in .build/apple/Products/Release.)
+#    to this script, then a Homebrew prefix bin/, then a source-tree release
+#    build, then build from source.
+#    Multi-arch `swift build` products live in .build/apple/Products/Release
+#    (capitalised) while single-arch ones land in .build/<triple>/release.
 find_built() {
   for candidate in \
     "$SCRIPT_DIR/.build/apple/Products/Release/$1" \
-    "$SCRIPT_DIR/.build/release/$1"; do
+    "$SCRIPT_DIR/.build/release/$1" \
+    "$SCRIPT_DIR/.build/arm64-apple-macosx/release/$1" \
+    "$SCRIPT_DIR/.build/x86_64-apple-macosx/release/$1"; do
     if [ -f "$candidate" ]; then echo "$candidate"; return 0; fi
   done
-  found="$(find "$SCRIPT_DIR/.build" -path "*release/$1" -type f 2>/dev/null | head -1 || true)"
-  [ -n "$found" ] && echo "$found" && return 0
+  # Restricted fallback: only real products. A bare `find -name` also matches
+  # SwiftPM intermediates and dSYM payloads, which are not runnable.
+  found="$(find "$SCRIPT_DIR/.build" -type f -name "$1" \
+    \( -path "*Products/*" -o -path "*/release/*" -o -path "*/Release/*" \) 2>/dev/null \
+    | head -1 || true)"
+  if [ -n "$found" ]; then echo "$found"; return 0; fi
   return 1
 }
 if [ -n "${HEADLESS_BIN:-}" ]; then
@@ -60,6 +68,9 @@ elif [ -f "$SCRIPT_DIR/../bin/headless-spotify" ]; then
   if [ -f "$BREW_BIN" ]; then
     install -m 0755 "$BREW_BIN" "$BIN"
     echo "installed $BREW_BIN -> $BIN"
+  else
+    echo "error: expected $BREW_BIN next to this script, but it is missing." >&2
+    exit 1
   fi
 elif BUILT_BIN="$(find_built headless-spotify)"; then
   install -m 0755 "$BUILT_BIN" "$BIN"
@@ -169,9 +180,14 @@ else
     sudo -u "$SUDO_USER" mkdir -p "$AGENTS_DIR"
     sudo -u "$SUDO_USER" "$BIN" watch --print-agent-plist --spotify-app "$SPOTIFY_APP" --interval 15 > "$AGENTS_DIR/com.headless-spotify.watcher.plist"
     chown "$SUDO_USER" "$AGENTS_DIR/com.headless-spotify.watcher.plist"
+    chmod 0644 "$AGENTS_DIR/com.headless-spotify.watcher.plist"
     sudo -u "$SUDO_USER" /bin/launchctl bootout "gui/$(id -u "$SUDO_USER")" "$AGENTS_DIR/com.headless-spotify.watcher.plist" 2>/dev/null || true
-    sudo -u "$SUDO_USER" /bin/launchctl bootstrap "gui/$(id -u "$SUDO_USER")" "$AGENTS_DIR/com.headless-spotify.watcher.plist"
-    echo "watcher agent loaded"
+    if sudo -u "$SUDO_USER" /bin/launchctl bootstrap "gui/$(id -u "$SUDO_USER")" "$AGENTS_DIR/com.headless-spotify.watcher.plist" 2>/dev/null; then
+      echo "watcher agent loaded"
+    else
+      echo "warning: could not load the watcher agent — enable it later with:" >&2
+      echo "  headless-spotify watch --install-agent" >&2
+    fi
   fi
 fi
 
