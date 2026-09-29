@@ -2,8 +2,9 @@
 #
 # Homebrew formula for headless-spotify. Ships the prebuilt universal CLI +
 # injector dylib from the GitHub release tarball (built by
-# scripts/package-release.sh). NOTE: `sha256`/`version` are refreshed by CI
-# (.github/workflows/release.yml) on every `v*` tag — do not hand-edit.
+# scripts/package-release.sh). NOTE: `url`/`sha256` are refreshed by CI
+# (.github/workflows/release.yml) on every `v*` tag, which also copies this
+# file into the Kathir-D/homebrew-tap tap — do not hand-edit them.
 class HeadlessSpotify < Formula
   desc "Hide official Spotify from Dock + Cmd-Tab, keep AppleScript control"
   homepage "https://github.com/Kathir-D/headless-spotify"
@@ -22,9 +23,11 @@ class HeadlessSpotify < Formula
     # `prefix/"x.app".install`) — the latter would nest the bundle inside a
     # directory of the same name.
     prefix.install "headless-spotify.app"
-    (prefix/"share/headless-spotify").install %w[
-      install.sh uninstall.sh VERSION README.md LICENSE THIRD-PARTY-NOTICES.md
-    ]
+    # install.sh finds bin/, lib/ and the .app next to itself, so it has to
+    # live at the top of the keg with them. Under share/ it found none of them
+    # and fell through to `swift build` in a directory with no Package.swift.
+    prefix.install "install.sh", "uninstall.sh"
+    (prefix/"share/headless-spotify").install %w[VERSION README.md LICENSE THIRD-PARTY-NOTICES.md]
     (prefix/"launchagent").install "launchagent/com.headless-spotify.watcher.plist"
   end
 
@@ -35,11 +38,14 @@ class HeadlessSpotify < Formula
 
       Nothing has touched Spotify yet. To hide it (this is the step that edits
       the bundle, and the only one that needs sudo):
-        sudo "$(brew --prefix)/share/headless-spotify/install.sh"
+        sudo "$(brew --prefix headless-spotify)/install.sh"
 
       That also copies the menu bar app from
-        $(brew --prefix)/headless-spotify.app
+        $(brew --prefix headless-spotify)/headless-spotify.app
       to /Applications/headless-spotify.app, and loads the watcher LaunchAgent.
+
+      To undo all of it before `brew uninstall headless-spotify`:
+        "$(brew --prefix headless-spotify)/uninstall.sh"
 
       Afterwards:
         headless-spotify status     # Dock? LSUIElement? player state?
@@ -63,6 +69,9 @@ class HeadlessSpotify < Formula
     assert_path_exists info
     assert_equal "true", shell_output("/usr/libexec/PlistBuddy -c 'Print :LSUIElement' '#{info}'").strip
     # The install helper that does the privileged work must be present.
-    assert_path_exists prefix/"share/headless-spotify/install.sh"
+    # It sits next to bin/, lib/ and the .app, which is where it looks for them.
+    assert_path_exists prefix/"install.sh"
+    assert_path_exists prefix/"bin/headless-spotify"
+    assert_path_exists prefix/"lib/libHeadlessSpotifyInjector.dylib"
   end
 end

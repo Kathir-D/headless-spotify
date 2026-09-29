@@ -76,14 +76,15 @@ not-headless, `restore` returns to normal.
 ### Homebrew (recommended)
 
 ```sh
-brew tap Kathir-D/homebrew-headless-spotify
-brew trust Kathir-D/homebrew-headless-spotify
-brew install headless-spotify
-sudo "$(brew --prefix)/share/headless-spotify/install.sh"
+brew tap Kathir-D/tap
+brew trust --tap Kathir-D/tap
+brew install kathir-d/tap/headless-spotify
+sudo "$(brew --prefix headless-spotify)/install.sh"
 ```
 
-`brew trust` is required: Homebrew 7 refuses to load formulae from an untrusted tap, and without
-it you get `Refusing to load formula … from untrusted tap`. The first `brew install` only puts the
+`Kathir-D/tap` is the same tap that ships [Sonar](https://github.com/Kathir-D/Sonar). `brew trust` is
+required: Homebrew 7 refuses to load formulae from an untrusted tap, and without it you get
+`Refusing to load formula … from untrusted tap`. The first `brew install` only puts the
 files in place — nothing touches Spotify. The second command is the part that edits Spotify, so it
 is kept separate and explicit.
 
@@ -358,14 +359,17 @@ The formula lives in this repo at [`Formula/headless-spotify.rb`](Formula/headle
 [`.github/workflows/release.yml`](.github/workflows/release.yml) on every `v*` tag — never hand-edit
 them, or CI will overwrite your change on the next release.
 
-To publish, mirror it into a tap of your own and verify:
+The same run copies the formula into the tap,
+[`Kathir-D/homebrew-tap`](https://github.com/Kathir-D/homebrew-tap), which is what `brew install`
+reads. It pushes with `TAP_DEPLOY_KEY`, a repository secret holding a deploy key that can write to
+that tap and nothing else. If the step fails, the release is already up: fix the secret and re-run
+the job. Verify a release with:
 
 ```sh
-brew tap Kathir-D/homebrew-headless-spotify
-brew trust Kathir-D/homebrew-headless-spotify
-brew install headless-spotify
-brew test headless-spotify
-brew audit --strict --online Kathir-D/homebrew-headless-spotify/headless-spotify
+brew update
+brew upgrade kathir-d/tap/headless-spotify   # or `brew install` the first time
+brew test kathir-d/tap/headless-spotify
+brew audit --strict --online kathir-d/tap/headless-spotify
 ```
 
 `brew test` checks the CLI version, the usage error for a missing bundle, and that the menu bar app

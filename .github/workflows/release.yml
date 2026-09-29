@@ -38,4 +38,41 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/headless-spotify.rb
-          git commit -m "chore: bump formula to v$VERSION" && git push
+          # A re-run for the same tag has nothing new to commit.
+          if git diff --cached --quiet; then
+            echo "Formula already points at v$VERSION."
+            exit 0
+          fi
+          git commit -m "chore: bump formula to v$VERSION"
+          # A tag-triggered checkout is a detached HEAD, so `git push` alone
+          # fails with "You are not currently on a branch". Push the bump to
+          # the default branch explicitly.
+          git push origin "HEAD:${{ github.event.repository.default_branch }}"
+      # `brew install kathir-d/tap/headless-spotify` reads the formula from the
+      # tap, not from this repo. TAP_DEPLOY_KEY is a deploy key with write
+      # access to Kathir-D/homebrew-tap and nothing else.
+      - name: Publish formula to the Homebrew tap
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          if [ -z "$TAP_DEPLOY_KEY" ]; then
+            echo "::error::TAP_DEPLOY_KEY is not set, so the tap was not updated. The release is up; add the secret and re-run this job."
+            exit 1
+          fi
+          KEY="$RUNNER_TEMP/tap_key"
+          printf '%s\n' "$TAP_DEPLOY_KEY" > "$KEY" && chmod 600 "$KEY"
+          export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 git@github.com:Kathir-D/homebrew-tap.git "$RUNNER_TEMP/tap"
+          mkdir -p "$RUNNER_TEMP/tap/Formula"
+          cp Formula/headless-spotify.rb "$RUNNER_TEMP/tap/Formula/headless-spotify.rb"
+          cd "$RUNNER_TEMP/tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/headless-spotify.rb
+          # A re-run for the same tag has nothing new to commit.
+          if git diff --cached --quiet; then
+            echo "The tap already has headless-spotify ${GITHUB_REF_NAME}."
+            exit 0
+          fi
+          git commit -m "headless-spotify ${GITHUB_REF_NAME#v}"
+          git push origin HEAD

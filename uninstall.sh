@@ -31,13 +31,21 @@ if need_root; then
   exit 1
 fi
 
+# The watcher belongs to the console user. Under sudo, `id -u` is 0 and $HOME
+# may be root's, so resolve both from SUDO_USER — otherwise bootout targets
+# root's GUI domain and the watcher keeps running (and re-hiding Spotify).
+GUI_USER="${SUDO_USER:-$(id -un)}"
+GUI_UID="$(id -u "$GUI_USER")"
+USER_HOME="$(dscl . -read "/Users/$GUI_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+USER_HOME="${USER_HOME:-$HOME}"
+
 # 1. Stop everything that could re-hide Spotify FIRST. The watcher polls every
 #    few seconds, so restoring the plist while it is still loaded can be undone
 #    by it before we get to step 2. Uninstall order is the safety property.
-for AGENTS_DIR in "$HOME/Library/LaunchAgents" /Library/LaunchAgents; do
+for AGENTS_DIR in "$USER_HOME/Library/LaunchAgents" /Library/LaunchAgents; do
   PLIST="$AGENTS_DIR/$LABEL.plist"
   if [ -f "$PLIST" ]; then
-    launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+    launchctl bootout "gui/$GUI_UID" "$PLIST" 2>/dev/null || true
     echo "stopped watcher $PLIST"
   fi
 done
@@ -57,7 +65,7 @@ else
 fi
 
 # 3. Remove the watcher agent files (already unloaded above).
-for AGENTS_DIR in "$HOME/Library/LaunchAgents" /Library/LaunchAgents; do
+for AGENTS_DIR in "$USER_HOME/Library/LaunchAgents" /Library/LaunchAgents; do
   PLIST="$AGENTS_DIR/$LABEL.plist"
   if [ -f "$PLIST" ]; then
     rm -f "$PLIST" && echo "removed $PLIST"
