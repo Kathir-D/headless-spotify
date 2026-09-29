@@ -147,11 +147,11 @@ the Spotify edit.
 ### Direct download
 
 ```sh
-curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.2/headless-spotify-0.1.0-beta.2-macos.tar.gz
-curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.2/SHA256SUMS.txt
+curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.3/headless-spotify-0.1.0-beta.3-macos.tar.gz
+curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.3/SHA256SUMS.txt
 shasum -a 256 -c SHA256SUMS.txt
-tar -xzf headless-spotify-0.1.0-beta.2-macos.tar.gz
-cd headless-spotify-0.1.0-beta.2
+tar -xzf headless-spotify-0.1.0-beta.3-macos.tar.gz
+cd headless-spotify-0.1.0-beta.3
 sudo ./install.sh /Applications/Spotify.app
 ```
 
