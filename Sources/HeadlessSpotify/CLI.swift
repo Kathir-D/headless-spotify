@@ -30,6 +30,8 @@ public struct Invocation: Sendable, Equatable {
     public var skipPlist: Bool
     /// `hide`: skip ad-hoc re-sign (relaunch will likely fail on Apple Silicon).
     public var noResign: Bool
+    /// `hide`: allow a bundle whose identifier is not com.spotify.client.
+    public var force: Bool
     /// `status`: machine-readable output for Sonar/scripts.
     public var json: Bool
     /// Print the plan without changing anything.
@@ -60,6 +62,7 @@ public struct Invocation: Sendable, Equatable {
         skipRelaunch: Bool = false,
         skipPlist: Bool = false,
         noResign: Bool = false,
+        force: Bool = false,
         json: Bool = false,
         dryRun: Bool = false,
         mode: HideMode = .auto,
@@ -80,6 +83,7 @@ public struct Invocation: Sendable, Equatable {
         self.skipRelaunch = skipRelaunch
         self.skipPlist = skipPlist
         self.noResign = noResign
+        self.force = force
         self.json = json
         self.dryRun = dryRun
         self.mode = mode
@@ -138,6 +142,7 @@ public enum CLI: Sendable {
           --skip-relaunch       Edit plist only, do not relaunch (for install.sh)
           --skip-plist          Relaunch + verify only, do not edit plist
           --no-resign           Skip ad-hoc re-sign (relaunch may fail)
+          --force               `hide` a bundle that is not com.spotify.client
           --interval <seconds>  `watch` pass interval (default: 15)
           --iterations <n>      `watch` passes then exit, 0 = forever (default: 0)
           --install-agent       Install + bootstrap the watcher LaunchAgent
@@ -213,6 +218,8 @@ public enum CLI: Sendable {
                 invocation.skipPlist = true
             case "--no-resign":
                 invocation.noResign = true
+            case "--force":
+                invocation.force = true
             case "--json":
                 invocation.json = true
             case "--dry-run":

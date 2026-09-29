@@ -9,7 +9,9 @@
 #      (activates:false) and verify `player state` (<=10 s default).
 #   4. Install the injector dylib to /usr/local/lib/headless-spotify/.
 #   5. Install + launch the menu bar extra (/Applications/headless-spotify.app).
-#   6. Generate + bootstrap the watcher LaunchAgent as the console user.
+#   6. Generate + bootstrap the watcher LaunchAgent as the console user
+#      (skipped when hiding failed — a watcher with nothing to do would only
+#      quit and relaunch a healthy Spotify).
 #
 # Usage: sudo ./install.sh [/Applications/Spotify.app]
 #   INSTALL_MENUBAR=0   skip step 5 (CLI only).
@@ -52,6 +54,13 @@ if [ -n "${HEADLESS_BIN:-}" ]; then
 elif [ -f "$SCRIPT_DIR/bin/headless-spotify" ]; then
   install -m 0755 "$SCRIPT_DIR/bin/headless-spotify" "$BIN"
   echo "installed $SCRIPT_DIR/bin/headless-spotify -> $BIN"
+elif [ -f "$SCRIPT_DIR/../bin/headless-spotify" ]; then
+  # Homebrew layout: share/headless-spotify/install.sh next to <prefix>/bin.
+  BREW_BIN="$(cd "$SCRIPT_DIR/../.." && pwd)/bin/headless-spotify"
+  if [ -f "$BREW_BIN" ]; then
+    install -m 0755 "$BREW_BIN" "$BIN"
+    echo "installed $BREW_BIN -> $BIN"
+  fi
 elif BUILT_BIN="$(find_built headless-spotify)"; then
   install -m 0755 "$BUILT_BIN" "$BIN"
   echo "installed $BUILT_BIN -> $BIN"
@@ -76,8 +85,8 @@ HIDE_OK=1
 sudo -u "$SUDO_USER" "$BIN" hide --skip-plist --spotify-app "$SPOTIFY_APP" || HIDE_OK=0
 if [ "$HIDE_OK" -eq 0 ]; then
   echo "" >&2
-  echo "install: hiding did not verify. The CLI, dylib, menu bar app and watcher" >&2
-  echo "install: are still installed and working." >&2
+  echo "install: hiding did not verify. The CLI, dylib and menu bar app are" >&2
+  echo "install: still installed and working, and Spotify is left as it was." >&2
   if [ "${KEEP_ON_FAILURE:-0}" = "1" ]; then
     echo "install: LSUIElement left in place (KEEP_ON_FAILURE=1) — Spotify may not launch." >&2
     echo "install: undo with: headless-spotify restore" >&2
@@ -112,11 +121,19 @@ if [ "${INSTALL_MENUBAR:-1}" = "0" ]; then
   echo "skipping menu bar app (INSTALL_MENUBAR=0)"
 else
   MENUBAR_APP=""
-  if [ -d "$SCRIPT_DIR/headless-spotify.app" ]; then
-    MENUBAR_APP="$SCRIPT_DIR/headless-spotify.app"
-  elif [ -d "$SCRIPT_DIR/dist/headless-spotify.app" ]; then
-    MENUBAR_APP="$SCRIPT_DIR/dist/headless-spotify.app"
-  elif [ -f "$SCRIPT_DIR/scripts/build-menubar.sh" ]; then
+  # Candidate order: tarball root (release download), Homebrew prefix
+  # (share/headless-spotify/../..), dist/ (local build), then build it.
+  for candidate in \
+    "$SCRIPT_DIR/headless-spotify.app" \
+    "$SCRIPT_DIR/../headless-spotify.app" \
+    "$SCRIPT_DIR/../../headless-spotify.app" \
+    "$SCRIPT_DIR/dist/headless-spotify.app"; do
+    if [ -d "$candidate" ]; then
+      MENUBAR_APP="$(cd "$(dirname "$candidate")" && pwd)/$(basename "$candidate")"
+      break
+    fi
+  done
+  if [ -z "$MENUBAR_APP" ] && [ -f "$SCRIPT_DIR/scripts/build-menubar.sh" ]; then
     "$SCRIPT_DIR/scripts/build-menubar.sh" >/dev/null 2>&1 || true
     if [ -d "$SCRIPT_DIR/dist/headless-spotify.app" ]; then
       MENUBAR_APP="$SCRIPT_DIR/dist/headless-spotify.app"
@@ -139,15 +156,28 @@ fi
 
 # 6. Watcher LaunchAgent: generate from the CLI (single source of truth) and
 #    bootstrap it as the console user so hiding survives updates + restarts.
-USER_HOME="$(dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
-if [ -n "$USER_HOME" ]; then
-  AGENTS_DIR="$USER_HOME/Library/LaunchAgents"
-  sudo -u "$SUDO_USER" mkdir -p "$AGENTS_DIR"
-  sudo -u "$SUDO_USER" "$BIN" watch --print-agent-plist --spotify-app "$SPOTIFY_APP" --interval 15 > "$AGENTS_DIR/com.headless-spotify.watcher.plist"
-  chown "$SUDO_USER" "$AGENTS_DIR/com.headless-spotify.watcher.plist"
-  sudo -u "$SUDO_USER" /bin/launchctl bootout "gui/$(id -u "$SUDO_USER")" "$AGENTS_DIR/com.headless-spotify.watcher.plist" 2>/dev/null || true
-  sudo -u "$SUDO_USER" /bin/launchctl bootstrap "gui/$(id -u "$SUDO_USER")" "$AGENTS_DIR/com.headless-spotify.watcher.plist"
-  echo "watcher agent loaded"
+#    Skipped when hiding failed: a daemon whose only job is to maintain hiding
+#    has nothing to do, and would otherwise quit and relaunch a perfectly good
+#    Spotify every few minutes. It stays one command away for later.
+if [ "$HIDE_OK" -eq 0 ] && [ "${KEEP_ON_FAILURE:-0}" != "1" ]; then
+  echo "skipping the watcher LaunchAgent (hiding did not verify) — start it later with:"
+  echo "  headless-spotify watch --install-agent"
+else
+  USER_HOME="$(dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+  if [ -n "$USER_HOME" ]; then
+    AGENTS_DIR="$USER_HOME/Library/LaunchAgents"
+    sudo -u "$SUDO_USER" mkdir -p "$AGENTS_DIR"
+    sudo -u "$SUDO_USER" "$BIN" watch --print-agent-plist --spotify-app "$SPOTIFY_APP" --interval 15 > "$AGENTS_DIR/com.headless-spotify.watcher.plist"
+    chown "$SUDO_USER" "$AGENTS_DIR/com.headless-spotify.watcher.plist"
+    sudo -u "$SUDO_USER" /bin/launchctl bootout "gui/$(id -u "$SUDO_USER")" "$AGENTS_DIR/com.headless-spotify.watcher.plist" 2>/dev/null || true
+    sudo -u "$SUDO_USER" /bin/launchctl bootstrap "gui/$(id -u "$SUDO_USER")" "$AGENTS_DIR/com.headless-spotify.watcher.plist"
+    echo "watcher agent loaded"
+  fi
 fi
 
-echo "done: Spotify is headless. Verify any time with: headless-spotify status"
+if [ "$HIDE_OK" -eq 1 ]; then
+  echo "done: Spotify is headless. Verify any time with: headless-spotify status"
+else
+  echo "done: CLI, dylib and menu bar app installed. Spotify is untouched and back to normal."
+  echo "Verify any time with: headless-spotify status"
+fi

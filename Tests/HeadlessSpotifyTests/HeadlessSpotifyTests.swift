@@ -780,3 +780,199 @@ struct TogglePlanTests {
         #expect(quoted.contains(#"\""#), "double quotes must be escaped for AppleScript")
     }
 }
+
+@Suite("Watcher leaves un-hideable Spotify alone")
+struct WatcherUnhideableTests {
+    func report(lsui: Bool? = true, dock: DockPresence = .hidden) -> Runner.StatusReport {
+        Runner.StatusReport(
+            appPath: "/Applications/Spotify.app", installed: true, running: true,
+            lsuiElement: lsui, dock: dock, playerState: "playing", hasBackup: false
+        )
+    }
+
+    @Test("a version that already failed is left completely alone")
+    func handsOffKnownBadVersion() {
+        // LSUIElement is absent (we rolled back) and the Dock is visible: every
+        // other signal says "re-apply", but this version is known-bad.
+        let action = Watcher.decide(
+            report: report(lsui: nil, dock: .visible),
+            lastSeenVersion: "1.3.1", currentVersion: "1.3.1",
+            plistFailures: 3, unhideableVersion: "1.3.1"
+        )
+        #expect(action == .none, "must not quit/relaunch a Spotify it cannot fix")
+    }
+
+    @Test("a different version is still worth trying")
+    func retriesAfterUpdate() {
+        let action = Watcher.decide(
+            report: report(lsui: nil, dock: .visible),
+            lastSeenVersion: "1.3.1", currentVersion: "1.4.0",
+            plistFailures: 3, unhideableVersion: "1.3.1"
+        )
+        #expect(action == .reapplyPlist(reason: "Spotify updated (1.3.1 → 1.4.0); re-applying LSUIElement"))
+    }
+
+    @Test("without a blocked version nothing changes")
+    func normalBehaviour() {
+        let action = Watcher.decide(
+            report: report(lsui: nil, dock: .visible),
+            lastSeenVersion: "1.3.1", currentVersion: "1.3.1",
+            plistFailures: 0, unhideableVersion: nil
+        )
+        if case .reapplyPlist = action {} else { #expect(Bool(false), "got \(action)") }
+    }
+
+    @Test("threshold is small enough to stop interference quickly")
+    func threshold() {
+        #expect(Watcher.unhideableThreshold == 3)
+    }
+}
+
+@Suite("Restore never applies a stale backup")
+struct StaleBackupTests {
+    /// Fixture with a version, hidden (LSUIElement=true) plus a backup taken
+    /// from a DIFFERENT version — i.e. Spotify updated while hidden.
+    func makeUpdatedWhileHidden() throws -> String {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headless-stale-\(UUID().uuidString)")
+        let contents = dir.appendingPathComponent("Spotify.app/Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist = SpotifyPlist(appPath: dir.appendingPathComponent("Spotify.app").path)
+        let original: [String: Any] = [
+            "CFBundleIdentifier": "com.spotify.client",
+            "CFBundleShortVersionString": "1.2.0",
+            "NewKeyFromOldVersion": "keep-me",
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: original, format: .xml, options: 0)
+        try data.write(to: plist.infoPlistURL)
+        try plist.setLSUIElement(true) // backs up 1.2.0 and records it
+
+        // Spotify auto-updates: new version, new plist, backup left behind.
+        let updated: [String: Any] = [
+            "CFBundleIdentifier": "com.spotify.client",
+            "CFBundleShortVersionString": "1.3.1",
+            "KeyOnlyNewVersionHas": "do-not-strip",
+        ]
+        try PropertyListSerialization
+            .data(fromPropertyList: updated, format: .xml, options: 0)
+            .write(to: plist.infoPlistURL)
+        return plist.appPath
+    }
+
+    @Test("mismatch is detected")
+    func detectsMismatch() throws {
+        let app = try makeUpdatedWhileHidden()
+        let plist = SpotifyPlist(appPath: app)
+        #expect(plist.backedUpAppVersion() == "1.2.0")
+        #expect(plist.appVersion() == "1.3.1")
+        #expect(plist.backupVersionMismatch())
+    }
+
+    @Test("same version is not a mismatch")
+    func sameVersion() throws {
+        let app = try makeUpdatedWhileHidden()
+        let plist = SpotifyPlist(appPath: app)
+        _ = try plist.removeLSUIElementOnly()
+        // Re-hide so the recorded version matches the installed one again.
+        try plist.setLSUIElement(true)
+        #expect(plist.backedUpAppVersion() == "1.3.1")
+        #expect(plist.backupVersionMismatch() == false)
+    }
+
+    @Test("safe restore keeps the new version's keys and drops our key")
+    func safeRestore() throws {
+        let app = try makeUpdatedWhileHidden()
+        let plist = SpotifyPlist(appPath: app)
+        try plist.removeLSUIElementOnly()
+        #expect(try plist.readLSUIElement() == nil, "our key must be gone")
+        #expect(try plist.appVersion() == "1.3.1", "new version must survive")
+        let data = try Data(contentsOf: plist.infoPlistURL)
+        var format = PropertyListSerialization.PropertyListFormat.xml
+        let dict = try #require(
+            PropertyListSerialization.propertyList(from: data, format: &format) as? [String: Any]
+        )
+        #expect(dict["KeyOnlyNewVersionHas"] as? String == "do-not-strip", "must not strip the new version's keys")
+        #expect(!plist.hasBackup)
+    }
+
+    @Test("normal restore still round-trips byte-for-byte")
+    func normalRestore() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headless-fresh-\(UUID().uuidString)")
+        let contents = dir.appendingPathComponent("Spotify.app/Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist = SpotifyPlist(appPath: dir.appendingPathComponent("Spotify.app").path)
+        let original: [String: Any] = [
+            "CFBundleIdentifier": "com.spotify.client",
+            "CFBundleShortVersionString": "2.0.0",
+        ]
+        try PropertyListSerialization
+            .data(fromPropertyList: original, format: .xml, options: 0)
+            .write(to: plist.infoPlistURL)
+        let before = try Data(contentsOf: plist.infoPlistURL)
+        try plist.setLSUIElement(true)
+        try plist.restore()
+        #expect(try Data(contentsOf: plist.infoPlistURL) == before, "untouched bundle must come back exactly")
+    }
+}
+
+@Suite("hide refuses to touch another app")
+struct BundleGuardTests {
+    func fixture(bundleID: String) throws -> String {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headless-guard-\(UUID().uuidString)/Spotify.app/Contents")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "CFBundleIdentifier": bundleID,
+                "CFBundleShortVersionString": "1.0.0",
+            ], format: .xml, options: 0)
+        try data.write(to: dir.appendingPathComponent("Info.plist"))
+        return dir.deletingLastPathComponent().path
+    }
+
+    @Test("a non-Spotify bundle is refused and left untouched", arguments: [
+        "com.apple.Safari", "com.example.Thing", "com.spotify.client.beta",
+    ])
+    func refusesOtherApps(bundleID: String) async throws {
+        let app = try fixture(bundleID: bundleID)
+        let errors = RunnerDryRunTests.Lines()
+        let code = await Runner.run(
+            Invocation(subcommand: .hide, spotifyAppPath: app, skipRelaunch: true),
+            output: { _ in }, errorOutput: { errors.values.append($0) }
+        )
+        #expect(code == 2)
+        #expect(errors.values.joined().contains("refusing to edit it"))
+        let plist = SpotifyPlist(appPath: app)
+        #expect(try plist.readLSUIElement() == nil, "the other app must not be modified")
+        #expect(!plist.hasBackup, "and must not be left with our backup files")
+    }
+
+    @Test("--force overrides the guard")
+    func forceOverrides() async throws {
+        let app = try fixture(bundleID: "com.example.Thing")
+        let code = await Runner.run(
+            Invocation(subcommand: .hide, spotifyAppPath: app, skipRelaunch: true, force: true),
+            output: { _ in }, errorOutput: { _ in }
+        )
+        #expect(code == 0)
+        #expect(try SpotifyPlist(appPath: app).readLSUIElement() == true)
+    }
+
+    @Test("real Spotify is still allowed")
+    func allowsSpotify() async throws {
+        let app = try fixture(bundleID: CLI.bundleID)
+        let code = await Runner.run(
+            Invocation(subcommand: .hide, spotifyAppPath: app, skipRelaunch: true),
+            output: { _ in }, errorOutput: { _ in }
+        )
+        #expect(code == 0)
+        #expect(try SpotifyPlist(appPath: app).readLSUIElement() == true)
+    }
+
+    @Test("--force parses")
+    func forceFlag() throws {
+        #expect(try CLI.parse(["headless-spotify", "hide", "--force"]).get().force)
+        #expect(try CLI.parse(["headless-spotify", "hide"]).get().force == false)
+    }
+}

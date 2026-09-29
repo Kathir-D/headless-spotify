@@ -16,8 +16,15 @@ class HeadlessSpotify < Formula
   def install
     bin.install "bin/headless-spotify"
     lib.install "lib/libHeadlessSpotifyInjector.dylib"
-    app "headless-spotify.app" => "/Applications"
-    prefix.install %w[install.sh uninstall.sh VERSION LICENSE README.md THIRD-PARTY-NOTICES.md]
+    # The menu bar app stays in the Cellar: the `app` DSL is cask-only, and
+    # writing to /Applications is a cask's job. install.sh (below) copies it
+    # into /Applications when you run it. `prefix.install` (not
+    # `prefix/"x.app".install`) — the latter would nest the bundle inside a
+    # directory of the same name.
+    prefix.install "headless-spotify.app"
+    (prefix/"share/headless-spotify").install %w[
+      install.sh uninstall.sh VERSION README.md LICENSE THIRD-PARTY-NOTICES.md
+    ]
     (prefix/"launchagent").install "launchagent/com.headless-spotify.watcher.plist"
   end
 
@@ -26,23 +33,23 @@ class HeadlessSpotify < Formula
       headless-spotify needs the official Spotify.app (Free tier works):
         brew install --cask spotify  # or download from spotify.com
 
-      The menu bar extra is installed to /Applications/headless-spotify.app.
-      Launch it from Applications (or `open /Applications/headless-spotify.app`);
-      its menu shows the project name and a Quit action.
-
-      Hide it (needs write access to Spotify.app):
+      Nothing has touched Spotify yet. To hide it (this is the step that edits
+      the bundle, and the only one that needs sudo):
         sudo "$(brew --prefix)/share/headless-spotify/install.sh"
-        # or, if /Applications/Spotify.app is already writable by you:
-        headless-spotify hide
-      Back to normal any time:
-        headless-spotify restore
-      Keep it headless across Spotify updates + restarts:
-        headless-spotify watch --install-agent
+
+      That also copies the menu bar app from
+        $(brew --prefix)/headless-spotify.app
+      to /Applications/headless-spotify.app, and loads the watcher LaunchAgent.
+
+      Afterwards:
+        headless-spotify status     # Dock? LSUIElement? player state?
+        headless-spotify restore    # back to normal, any time
+        headless-spotify watch --uninstall-agent   # stop the watcher only
 
       Known limits (see README): Spotify >= 1.3.1 currently exits when
-      LSUIElement is set, and its hardened runtime ignores the injector
-      dylib. `status`/`hide` report this honestly, and install.sh rolls the
-      bundle back so Spotify keeps launching.
+      LSUIElement is set, and its hardened runtime ignores the injector dylib.
+      On those versions install.sh rolls the bundle back, leaves Spotify
+      untouched, and skips the watcher.
     EOS
   end
 
@@ -51,11 +58,11 @@ class HeadlessSpotify < Formula
     # Missing bundle: usage error (exit 2), no Spotify needed for the test.
     output = shell_output("#{bin}/headless-spotify hide --dry-run --spotify-app /nonexistent/Spotify.app 2>&1", 2)
     assert_match "not found", output
-    # Menu bar extra: shipped in the tarball, installed into /Applications.
-    menubar = "/Applications/headless-spotify.app"
-    assert_path_exists "#{menubar}/Contents/Info.plist"
-    plist = shell_output("/usr/libexec/PlistBuddy -c 'Print :LSUIElement' " \
-                         "'#{menubar}/Contents/Info.plist'")
-    assert_equal "true", plist.strip
+    # Menu bar extra ships with the formula; install.sh puts it in /Applications.
+    info = prefix/"headless-spotify.app/Contents/Info.plist"
+    assert_path_exists info
+    assert_equal "true", shell_output("/usr/libexec/PlistBuddy -c 'Print :LSUIElement' '#{info}'").strip
+    # The install helper that does the privileged work must be present.
+    assert_path_exists prefix/"share/headless-spotify/install.sh"
   end
 end

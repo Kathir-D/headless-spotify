@@ -1,9 +1,10 @@
 #!/bin/sh
 # MIT License — Copyright (c) 2026 headless-spotify Contributors (see LICENSE).
 #
-# uninstall.sh — reverse install.sh: restore the original Info.plist (+ seal,
-# so Apple's signature verifies again), relaunch Spotify normally, unload and
-# remove the watcher agent, remove the CLI binary.
+# uninstall.sh — reverse install.sh: stop the watcher and the menu bar app
+# FIRST (so nothing can re-hide Spotify mid-uninstall), then restore the
+# original Info.plist (+ seal, so Apple's signature verifies again), relaunch
+# Spotify normally, and remove the agent, the app and the CLI.
 #
 # Runs as you; re-run with sudo only if the bundle is root-owned.
 # Usage: ./uninstall.sh [/Applications/Spotify.app]
@@ -24,7 +25,19 @@ if need_root; then
   exit 1
 fi
 
-# 1. Restore original plist (+ seal); skip relaunch here…
+# 1. Stop everything that could re-hide Spotify FIRST. The watcher polls every
+#    few seconds, so restoring the plist while it is still loaded can be undone
+#    by it before we get to step 2. Uninstall order is the safety property.
+for AGENTS_DIR in "$HOME/Library/LaunchAgents" /Library/LaunchAgents; do
+  PLIST="$AGENTS_DIR/$LABEL.plist"
+  if [ -f "$PLIST" ]; then
+    launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+    echo "stopped watcher $PLIST"
+  fi
+done
+pkill -f "headless-spotify watch" 2>/dev/null || true
+
+# 2. Restore original plist (+ seal); skip relaunch here…
 if [ -x "$BIN" ]; then
   "$BIN" restore --skip-relaunch --spotify-app "$SPOTIFY_APP" || true
   # …then relaunch normally as the console user (never as root).
@@ -37,7 +50,15 @@ else
   echo "warning: $BIN not found — skipping relaunch (restore the backup manually if needed)." >&2
 fi
 
-# 2. Remove the menu bar app (quit it first so it is not left running).
+# 3. Remove the watcher agent files (already unloaded above).
+for AGENTS_DIR in "$HOME/Library/LaunchAgents" /Library/LaunchAgents; do
+  PLIST="$AGENTS_DIR/$LABEL.plist"
+  if [ -f "$PLIST" ]; then
+    rm -f "$PLIST" && echo "removed $PLIST"
+  fi
+done
+
+# 4. Remove the menu bar app (quit it first so it is not left running).
 MENUBAR_APP="/Applications/headless-spotify.app"
 if [ -d "$MENUBAR_APP" ]; then
   pkill -f headless-spotify-bar 2>/dev/null || true
@@ -48,17 +69,7 @@ if [ -d "$MENUBAR_APP" ]; then
   fi
 fi
 
-# 3. Unload + remove watcher agent (best effort; absent until task 3).
-for AGENTS_DIR in "$HOME/Library/LaunchAgents" /Library/LaunchAgents; do
-  PLIST="$AGENTS_DIR/$LABEL.plist"
-  if [ -f "$PLIST" ]; then
-    UID_NUM="$(id -u)"
-    launchctl bootout "gui/$UID_NUM" "$PLIST" 2>/dev/null || true
-    rm -f "$PLIST" && echo "removed $PLIST"
-  fi
-done
-
-# 4. Remove CLI binary + injector dylib.
+# 5. Remove CLI binary + injector dylib.
 if [ -f "$BIN" ] && [ -w "$(dirname "$BIN")" ]; then
   rm -f "$BIN" && echo "removed $BIN"
 elif [ -f "$BIN" ]; then

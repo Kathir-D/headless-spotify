@@ -7,25 +7,32 @@
 
 Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — windows still work, AppleScript still works, so [Sonar](https://github.com/Kathir-D/sonar) controls it identically to normal Spotify. No Premium, no API key, no Soloist/librespot.
 
-## Table of Contents
+## Contents
 
 - [Features](#features)
 - [Current status](#current-status)
 - [Requirements](#requirements)
 - [Install](#install)
-- [Homebrew](#homebrew)
+  - [Homebrew (recommended)](#homebrew-recommended)
+  - [Direct download](#direct-download)
+  - [Build from source](#build-from-source)
+  - [What install.sh does](#what-installsh-does)
 - [Usage](#usage)
 - [Menu bar extra](#menu-bar-extra)
 - [How it works](#how-it-works)
+- [What it will not do to your Spotify](#what-it-will-not-do-to-your-spotify)
 - [Sonar compatibility](#sonar-compatibility)
 - [Troubleshooting](#troubleshooting)
 - [Uninstall](#uninstall)
 - [Developing](#developing)
-- [Credits & provenance](#credits--provenance)
 - [Contributing](#contributing)
+- [Publishing to Homebrew](#publishing-to-homebrew)
+- [Credits & provenance](#credits--provenance)
 - [License](#license)
 
 ## Features
+
+[⬆ Back to top](#headless-spotify)
 
 - **Hides Spotify from the Dock and Cmd-Tab**, keeps windows and playback working.
 - **Keeps the Spotify contract intact**: process stays `com.spotify.client`, scripting dictionary untouched — Sonar matches by bundleID + `player state` only.
@@ -37,6 +44,8 @@ Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — win
 - **Zero dependencies**: Swift standard library + Foundation/AppKit only. No API keys, no certs, nothing to configure.
 
 ## Current status
+
+[⬆ Back to top](#headless-spotify)
 
 > ⛔ **Blocked on Spotify ≥1.3.1 (verified 2026-09-28, macOS 26):** with
 > `LSUIElement=true` present (ad-hoc seal, `codesign --verify` clean),
@@ -55,6 +64,8 @@ not-headless, `restore` returns to normal.
 
 ## Requirements
 
+[⬆ Back to top](#headless-spotify)
+
 - macOS 15+ (Sequoia or later).
 - Official Spotify.app (Free tier works) at `/Applications/Spotify.app` (or pass `--spotify-app`).
 - Xcode Command Line Tools (`swift`) — enough to build, install, and use.
@@ -62,40 +73,80 @@ not-headless, `restore` returns to normal.
 
 ## Install
 
+### Homebrew (recommended)
+
 ```sh
-git clone https://github.com/Kathir-D/headless-spotify.git && cd headless-spotify
+brew tap Kathir-D/homebrew-headless-spotify
+brew trust Kathir-D/homebrew-headless-spotify
+brew install headless-spotify
+sudo "$(brew --prefix)/share/headless-spotify/install.sh"
+```
+
+`brew trust` is required: Homebrew 7 refuses to load formulae from an untrusted tap, and without
+it you get `Refusing to load formula … from untrusted tap`. The first `brew install` only puts the
+files in place — nothing touches Spotify. The second command is the part that edits Spotify, so it
+is kept separate and explicit.
+
+### Direct download
+
+```sh
+curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.1/headless-spotify-0.1.0-beta.1-macos.tar.gz
+curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.1/SHA256SUMS.txt
+shasum -a 256 -c SHA256SUMS.txt
+tar -xzf headless-spotify-0.1.0-beta.1-macos.tar.gz
+cd headless-spotify-0.1.0-beta.1
 sudo ./install.sh /Applications/Spotify.app
 ```
 
-What it does:
+`curl` does not set the quarantine attribute, so this may not prompt at all. A **browser** download
+always does — if macOS refuses to run the app or the CLI, run
+`xattr -dr com.apple.quarantine .` in the extracted folder, or approve once in
+**System Settings › Privacy & Security › Open Anyway**. The artifacts are ad-hoc signed, not
+notarized, because the project has no paid Apple Developer account.
 
-1. Builds the release CLI + dylib (or reuses a prebuilt `bin/`), installs them to `/usr/local/bin` and `/usr/local/lib/headless-spotify/`.
-2. Backs up `Info.plist` (+ the code-seal file), sets `LSUIElement=true`, ad-hoc re-signs (credit: [4ian/hide-spotify-from-dock](https://github.com/4ian/hide-spotify-from-dock)).
-3. Relaunches Spotify headless **as you** (`NSWorkspace.openApplication(activates:false)`) and polls `player state` for up to 10 s.
-4. Installs and launches the menu bar extra at `/Applications/headless-spotify.app` (skip with `INSTALL_MENUBAR=0 sudo ./install.sh`).
-5. Loads the watcher LaunchAgent so hiding survives updates + restarts.
-
-`sudo` is needed only here (bundle edit + system paths) — the CLI itself never needs root.
-
-If hiding does not verify — which is what happens on Spotify ≥1.3.1 today — `install.sh` **does not fail and does not leave Spotify broken**: it prints an explanation, rolls `Info.plist` back, relaunches Spotify normally, and continues installing the CLI, dylib, menu bar app, and watcher. Pass `KEEP_ON_FAILURE=1` if you'd rather keep `LSUIElement` set anyway.
-
-> **Gatekeeper:** the release artifacts are ad-hoc signed, not notarized. A tarball downloaded in a browser is quarantined, so macOS may refuse to run it. Use Homebrew (no quarantine), or clear it once:
-> `xattr -dr com.apple.quarantine <folder>` — or right-click the app → Open → Open.
-
-## Homebrew
-
-The formula lives in this repo at [`Formula/headless-spotify.rb`](Formula/headless-spotify.rb) and installs the CLI, the injector dylib, and the menu bar app into `/Applications`. Its `url` + `sha256` point at the GitHub release tarball and are refreshed automatically by the [release workflow](.github/workflows/release.yml) on every `v*` tag, so they are only correct after a release exists.
-
-To publish, mirror the formula into a tap of your own (`homebrew-<name>/homebrew-<tap>`) and:
+### Build from source
 
 ```sh
-brew tap Kathir-D/<your-tap>
-brew install headless-spotify
-brew test headless-spotify
-brew audit --strict --online Kathir-D/<your-tap>/headless-spotify
+git clone https://github.com/Kathir-D/headless-spotify.git
+cd headless-spotify
+swift build            # Command Line Tools are enough for this
+sudo ./install.sh /Applications/Spotify.app
 ```
 
+`install.sh` reuses `swift build -c release` products when it finds them, so a plain `swift build`
+is enough; it only builds for itself if there is nothing to reuse. `swift test` additionally needs
+full Xcode — with Xcode installed but not selected, run
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test`.
+
+### What install.sh does
+
+| Step | What it does | Needs `sudo` |
+| --- | --- | --- |
+| 1 | Installs the CLI to `/usr/local/bin` and the injector dylib to `/usr/local/lib/headless-spotify/` | yes |
+| 2 | Backs up `Info.plist` **and** its code seal, sets `LSUIElement=true`, ad-hoc re-signs | yes |
+| 3 | Relaunches Spotify headless **as you** (`activates:false`) and polls `player state` for up to 10 s | no |
+| 4 | Installs and launches the menu bar app at `/Applications/headless-spotify.app` | yes |
+| 5 | Loads the watcher LaunchAgent so hiding survives Spotify updates and restarts | partly |
+
+`sudo` is needed only for this one command — the CLI itself never needs root.
+
+| Flag | Effect |
+| --- | --- |
+| `INSTALL_MENUBAR=0` | Skip the menu bar app (CLI + watcher only) |
+| `KEEP_ON_FAILURE=1` | If hiding fails, keep `LSUIElement` set instead of rolling back |
+
+> **If hiding does not verify — which is what happens on Spotify ≥1.3.1 today — `install.sh` does
+> not fail and does not leave Spotify broken.** It prints an explanation, rolls `Info.plist` back,
+> relaunches Spotify normally, and finishes installing the CLI, dylib and menu bar app. It then
+> **skips the watcher**, because a daemon whose only job is to maintain hiding has nothing to do
+> and would otherwise quit and relaunch a healthy Spotify every few minutes. Start it whenever
+> hiding actually works: `headless-spotify watch --install-agent`.
+
+[⬆ Back to top](#headless-spotify)
+
 ## Usage
+
+[⬆ Back to top](#headless-spotify)
 
 ```sh
 headless-spotify status            # Dock? LSUIElement? player state? (exit 0 only when headless+scriptable)
@@ -139,6 +190,8 @@ Match by `bundleID == com.spotify.client`, never by Dock or window presence.
 
 ## Menu bar extra
 
+[⬆ Back to top](#headless-spotify)
+
 `install.sh` also drops a small menu bar app in `/Applications/headless-spotify.app`. It adds a waveform icon to the top bar; clicking it opens a menu with the project name (greyed out), an **Enable/Disable hiding** toggle, and **Quit headless-spotify**.
 
 ```
@@ -171,6 +224,8 @@ Build it yourself (a release tarball already ships the `.app` ready to copy):
 
 ## How it works
 
+[⬆ Back to top](#headless-spotify)
+
 Two hiding methods, tried in order (`hide --mode auto`, the default):
 
 1. **LSUIElement mode (primary).** Sets `LSUIElement=true` in
@@ -194,7 +249,30 @@ plist + re-sign + relaunch; Dock survives plist mode → injector. If hiding kee
 failing (the Spotify ≥1.3.1 case above), the watcher backs off exponentially —
 2×, 4×, 8×, then every 16 intervals — so it never spins on quit + re-sign.
 
+## What it will not do to your Spotify
+
+This project edits a signed system bundle, so the rules it holds itself to are stricter than
+"it usually works". Every one of these is enforced in code, not left to judgement:
+
+| | Guarantee |
+| --- | --- |
+| **A failed hide is rolled back** | If hiding does not verify, `install.sh` restores `Info.plist` and relaunches Spotify. It never leaves you with a Spotify that will not start, and it never exits "successfully" while Spotify is broken |
+| **A version that cannot be hidden is left alone** | After 3 failed attempts the watcher marks that Spotify version unhideable and stops touching it completely — no more quitting, no more re-signing. It only retries when Spotify's version actually changes |
+| **It never fights you** | `restore` is always available, works while hidden, and needs no arguments |
+| **A stale backup is never applied** | If Spotify auto-updated while hidden, `restore` removes only the key we added instead of copying an old `Info.plist` over the new one. The original Apple signature cannot be recovered from a stale backup, and it says so |
+| **Uninstall stops everything first** | The watcher and the menu bar app are killed *before* the bundle is restored, so a running daemon cannot re-hide Spotify mid-uninstall |
+| **Your data and settings are never touched** | Only `LSUIElement` is written, and only the two files that are backed up first: `Contents/Info.plist` and `Contents/_CodeSignature/CodeResources` |
+| **The injector cannot reach other apps** | `libHeadlessSpotifyInjector.dylib` is gated on `bundleID == com.spotify.client` and does nothing in any other process |
+| **It only ever edits Spotify** | `hide` refuses any bundle whose identifier is not `com.spotify.client`, so a wrong `--spotify-app` cannot de-icon some other app. `--force` overrides it deliberately |
+| **The CLI never needs root** | `sudo` appears once, in `install.sh`. Every other command runs as you |
+| **Playback restarts, nothing else** | Hiding must relaunch Spotify, so playback restarts. No playlist, library or account state is altered |
+| **One-time kill switch** | `headless-spotify watch --uninstall-agent` stops the watcher without uninstalling anything |
+
+[⬆ Back to top](#headless-spotify)
+
 ## Sonar compatibility
+
+[⬆ Back to top](#headless-spotify)
 
 | Spotify mode | Sonar sees it | Control |
 |---|---|---|
@@ -208,6 +286,8 @@ Spotify 1.3.1; the CLI enforces this honestly (`hide` exits 1, `status`
 reports not-headless, `restore` returns to normal).
 
 ## Troubleshooting
+
+[⬆ Back to top](#headless-spotify)
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -227,6 +307,8 @@ users have already granted.
 
 ## Uninstall
 
+[⬆ Back to top](#headless-spotify)
+
 ```sh
 ./uninstall.sh /Applications/Spotify.app   # sudo only if the bundle is root-owned
 ```
@@ -238,9 +320,11 @@ changes.
 
 ## Developing
 
+[⬆ Back to top](#headless-spotify)
+
 ```sh
 swift build          # CLI + injector dylib + menu bar extra (Command Line Tools are enough)
-swift test           # 65 tests in 16 suites, all offline-safe (fixtures, stubbed runners)
+swift test           # 77 tests in 19 suites, all offline-safe (fixtures, stubbed runners)
 ./scripts/smoke-test.sh            # pre-release gate (pass --live to exercise real media controls)
 ./scripts/build-menubar.sh          # menu bar app bundle (debug: CONFIG=debug)
 ./scripts/package-release.sh       # versioned tarball + SHA256SUMS.txt (see VERSION)
@@ -254,7 +338,46 @@ Layout: `Sources/HeadlessSpotify/*` (CLI), `Sources/HeadlessSpotifyBar/*` +
 `launchagent/*.plist`, `Formula/headless-spotify.rb`,
 `scripts/package-release.sh` + `scripts/smoke-test.sh`.
 
+## Contributing
+
+[⬆ Back to top](#headless-spotify)
+
+Issues and small PRs welcome. Conventional commits (`feat:`, `fix:`, `docs:`,
+`test:`, `chore:`), `git status` before committing. Before opening a PR,
+run `swift build`, `swift test` (full Xcode), and `./scripts/smoke-test.sh`.
+
+## Publishing to Homebrew
+
+The formula lives in this repo at [`Formula/headless-spotify.rb`](Formula/headless-spotify.rb). Its
+`url` and `sha256` point at the GitHub release tarball and are rewritten automatically by
+[`.github/workflows/release.yml`](.github/workflows/release.yml) on every `v*` tag — never hand-edit
+them, or CI will overwrite your change on the next release.
+
+To publish, mirror it into a tap of your own and verify:
+
+```sh
+brew tap Kathir-D/homebrew-headless-spotify
+brew trust Kathir-D/homebrew-headless-spotify
+brew install headless-spotify
+brew test headless-spotify
+brew audit --strict --online Kathir-D/homebrew-headless-spotify/headless-spotify
+```
+
+`brew test` checks the CLI version, the usage error for a missing bundle, and that the menu bar app
+landed in `/Applications` with `LSUIElement` set. CI runs `brew audit --strict` on every push, so a
+formula that would be rejected upstream is caught before it is tagged.
+
+> **Why a personal tap rather than `homebrew/core`?** Homebrew's policy requires anything in its
+> official repositories to be assessable by Gatekeeper, and a formula must not need `sudo` to become
+> useful. headless-spotify is ad-hoc signed and un-notarized, and hiding Spotify necessarily edits a
+> root-owned system bundle — so it belongs in your own tap, which is exactly what
+> [`Kathir-D/Sonar`](https://github.com/Kathir-D/Sonar) does for the same reason.
+
+[⬆ Back to top](#headless-spotify)
+
 ## Credits & provenance
+
+[⬆ Back to top](#headless-spotify)
 
 | What | Source | Author | License | How used |
 |---|---|---|---|---|
@@ -264,12 +387,8 @@ Layout: `Sources/HeadlessSpotify/*` (CLI), `Sources/HeadlessSpotifyBar/*` +
 
 Full texts: see `THIRD-PARTY-NOTICES.md` + `LICENSE`.
 
-## Contributing
-
-Issues and small PRs welcome. Conventional commits (`feat:`, `fix:`, `docs:`,
-`test:`, `chore:`), `git status` before committing. Before opening a PR,
-run `swift build`, `swift test` (full Xcode), and `./scripts/smoke-test.sh`.
-
 ## License
+
+[⬆ Back to top](#headless-spotify)
 
 MIT — see `LICENSE`.

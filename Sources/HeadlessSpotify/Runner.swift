@@ -165,6 +165,13 @@ public enum Runner {
             output(hidePlan(inv, lsui: current, writable: plist.isWritable))
             return 0
         }
+        // Refuse to edit anything that is not Spotify. Pointing --spotify-app
+        // at the wrong bundle would re-sign and de-icon an unrelated app.
+        if !inv.force, let identifier = plist.bundleIdentifier(), identifier != CLI.bundleID {
+            errorOutput("hide: \(inv.spotifyAppPath) is \(identifier), not \(CLI.bundleID) — refusing to edit it.")
+            errorOutput("hide: pass --force only if you really mean to hide a different app.")
+            return 2
+        }
         if !inv.skipPlist {
             guard plist.isWritable else {
                 errorOutput("hide: \(plist.infoPlistURL.path) is not writable — run `sudo ./install.sh \(inv.spotifyAppPath)`")
@@ -312,16 +319,22 @@ public enum Runner {
         var lastVersion = plist.appVersion()
         var plistFailures = 0
         var consecutiveFailures = 0
+        var unhideableVersion: String?
         var pass = 0
         while true {
             pass += 1
             let report = await collectStatus(appPath: inv.spotifyAppPath)
             let currentVersion = plist.appVersion()
+            if let blocked = unhideableVersion, let current = currentVersion, current != blocked {
+                unhideableVersion = nil
+                output("watch: Spotify updated (\(blocked) → \(current)) — trying to hide it again")
+            }
             let action = Watcher.decide(
                 report: report,
                 lastSeenVersion: lastVersion,
                 currentVersion: currentVersion,
-                plistFailures: plistFailures
+                plistFailures: plistFailures,
+                unhideableVersion: unhideableVersion
             )
             let outcome: Int32
             switch action {
@@ -358,6 +371,14 @@ public enum Runner {
             let sleep = Watcher.backoffInterval(base: inv.interval, failures: consecutiveFailures)
             if outcome != 0, consecutiveFailures == 1 {
                 errorOutput("watch: hiding failed — backing off to \(Int(sleep))s between attempts (up to \(Int(Watcher.backoffInterval(base: inv.interval, failures: 4)))s). If this persists, see README 'Current status'.")
+            }
+            if outcome != 0,
+               unhideableVersion == nil,
+               consecutiveFailures >= Watcher.unhideableThreshold,
+               let blocked = currentVersion
+            {
+                unhideableVersion = blocked
+                errorOutput("watch: Spotify \(blocked) cannot be hidden after \(consecutiveFailures) attempts — leaving it completely alone now. It will only be retried after a Spotify update.")
             }
             lastVersion = currentVersion
             if inv.iterations > 0, pass >= inv.iterations {
@@ -452,8 +473,23 @@ public enum Runner {
             }
             do {
                 if plist.hasBackup {
-                    try plist.restore()
-                    output("restore: original Info.plist (+ seal) restored, backup removed")
+                    if plist.backupVersionMismatch() {
+                        // Spotify auto-updated while hidden. Copying the old
+                        // Info.plist back could strip keys the new version
+                        // needs, so only drop the key we added.
+                        try plist.removeLSUIElementOnly()
+                        output("restore: Spotify updated while hidden — removed only the LSUIElement key (stale backup not applied)")
+                        let resign = SpotifyScripting.resignAdHoc(appPath: inv.spotifyAppPath)
+                        if resign.exitCode != 0 {
+                            errorOutput("restore: warning — ad-hoc re-sign failed: \(resign.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+                        } else {
+                            output("restore: re-signed ad-hoc (Apple's original signature cannot come back from a stale backup)")
+                        }
+                        output("restore: to get Spotify's own signature back, reinstall Spotify from spotify.com")
+                    } else {
+                        try plist.restore()
+                        output("restore: original Info.plist (+ seal) restored, backup removed")
+                    }
                 } else if (try? plist.readLSUIElement()) == true {
                     try plist.setLSUIElement(nil, backupFirst: true)
                     output("restore: no backup found — removed LSUIElement key (a backup of the edited plist was kept)")

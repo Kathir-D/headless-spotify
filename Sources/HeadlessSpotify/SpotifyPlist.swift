@@ -41,6 +41,22 @@ public struct SpotifyPlist: Sendable {
         URL(fileURLWithPath: appPath).appendingPathComponent("Contents/_CodeSignature/CodeResources.headless-spotify-backup")
     }
 
+    /// Records which app version the backup belongs to. A backup taken before a
+    /// Spotify update must never be copied back over the updated bundle: the
+    /// old Info.plist may be missing keys the new version needs.
+    public var backupVersionURL: URL {
+        URL(fileURLWithPath: appPath).appendingPathComponent("Contents/Info.plist.headless-spotify-backup.version")
+    }
+
+    /// Version recorded when the backup was taken, if known.
+    public func backedUpAppVersion() -> String? {
+        guard let data = try? Data(contentsOf: backupVersionURL),
+              let version = String(data: data, encoding: .utf8)
+        else { return nil }
+        let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     public var appExists: Bool {
         FileManager.default.fileExists(atPath: appPath)
     }
@@ -66,6 +82,16 @@ public struct SpotifyPlist: Sendable {
               let dict = try? PropertyListSerialization.propertyList(from: data, format: &format) as? [String: Any]
         else { return nil }
         return dict["CFBundleShortVersionString"] as? String
+    }
+
+    /// Bundle identifier of the target (CFBundleIdentifier). Used to refuse
+    /// editing anything that is not Spotify.
+    public func bundleIdentifier() -> String? {
+        guard let data = try? Data(contentsOf: infoPlistURL),
+              var format = Optional(PropertyListSerialization.PropertyListFormat.xml),
+              let dict = try? PropertyListSerialization.propertyList(from: data, format: &format) as? [String: Any]
+        else { return nil }
+        return dict["CFBundleIdentifier"] as? String
     }
 
     /// Current LSUIElement value. nil = key absent (normal Dock mode).
@@ -106,6 +132,10 @@ public struct SpotifyPlist: Sendable {
         }
         if !hasBackup {
             try fm.copyItem(at: infoPlistURL, to: backupURL)
+            if let version = appVersion() {
+                // Advisory only: a mismatch must never restore a stale plist.
+                try? Data(version.utf8).write(to: backupVersionURL)
+            }
         }
     }
 
@@ -127,6 +157,15 @@ public struct SpotifyPlist: Sendable {
         try out.write(to: infoPlistURL, options: .atomic)
     }
 
+    /// True when the backup was taken from a different Spotify version than
+    /// the one installed now — i.e. Spotify auto-updated while hidden. Copying
+    /// that plist back could strip keys the new version needs, so the caller
+    /// takes the `removeLSUIElementOnly()` path instead.
+    public func backupVersionMismatch() -> Bool {
+        guard let backedUp = backedUpAppVersion(), let current = appVersion() else { return false }
+        return backedUp != current
+    }
+
     /// Restore the backup over Info.plist (+ CodeResources) and remove backups,
     /// leaving the bundle exactly as before hide.
     public func restore() throws {
@@ -145,5 +184,19 @@ public struct SpotifyPlist: Sendable {
             try fm.copyItem(at: codeResourcesBackupURL, to: codeResourcesURL)
             try fm.removeItem(at: codeResourcesBackupURL)
         }
+        try? fm.removeItem(at: backupVersionURL)
+    }
+
+    /// Safe restore for a bundle that was updated after hiding: drop only the
+    /// `LSUIElement` key from the *current* plist instead of copying a stale
+    /// one back. The bundle stays launchable; its signature is now ours, so the
+    /// caller re-signs ad-hoc and tells the user to reinstall Spotify for a
+    /// pristine signature.
+    public func removeLSUIElementOnly() throws {
+        try setLSUIElement(nil, backupFirst: false)
+        let fm = FileManager.default
+        try? fm.removeItem(at: backupURL)
+        try? fm.removeItem(at: codeResourcesBackupURL)
+        try? fm.removeItem(at: backupVersionURL)
     }
 }

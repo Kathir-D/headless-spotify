@@ -19,18 +19,30 @@ public enum WatchAction: Sendable, Equatable {
 }
 
 public enum Watcher: Sendable {
+    /// Consecutive failed hiding attempts after which we stop touching a given
+    /// Spotify version altogether. Each attempt costs a quit + relaunch +
+    /// deep re-sign, so a version that cannot be hidden must be left alone
+    /// rather than fought. The count resets when hiding succeeds, or when the
+    /// app version changes (which is the one moment a retry is worth it).
+    public static let unhideableThreshold = 3
+
     /// Decide from one status snapshot. `lastSeenVersion` is the app version
     /// from the previous pass (nil on the first pass); `plistFailures` counts
     /// consecutive passes where plist mode was correct yet the Dock stayed
-    /// visible — that is the injector trigger.
+    /// visible — that is the injector trigger. `unhideableVersion` is a version
+    /// we already failed to hide N times: for it, do nothing at all.
     public static func decide(
         report: Runner.StatusReport,
         lastSeenVersion: String?,
         currentVersion: String?,
-        plistFailures: Int
+        plistFailures: Int,
+        unhideableVersion: String? = nil
     ) -> WatchAction {
         guard report.installed else { return .none }
         guard report.running else { return .none } // don't launch Spotify unasked
+        if let blocked = unhideableVersion, let current = currentVersion, current == blocked {
+            return .none // this version refuses to be hidden — hands off
+        }
         if let current = currentVersion, let last = lastSeenVersion, current != last {
             return .reapplyPlist(reason: "Spotify updated (\(last) → \(current)); re-applying LSUIElement")
         }
