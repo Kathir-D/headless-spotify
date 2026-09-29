@@ -39,4 +39,16 @@ sed -e "s|^  sha256 \".*\"|  sha256 \"$SHA\"|" \
     -e "s|^  url \"https://github.com.*|  url \"file://$SCRIPT_DIR/dist/$TARBALL\"|" \
     Casks/headless-spotify.rb > "$TAPDIR/Casks/headless-spotify.rb"
 
+# A sed that quietly matches nothing leaves a cask pointing at a release whose
+# checksum it does not have, and every check downstream then either fails for
+# the wrong reason or — worse — passes against a download it never looked at.
+if ! grep -q "^  sha256 \"$SHA\"$" "$TAPDIR/Casks/headless-spotify.rb"; then
+  echo "error: the sha256 line was not rewritten; the cask layout changed" >&2
+  exit 1
+fi
+if ! grep -q "^  url \"file://" "$TAPDIR/Casks/headless-spotify.rb"; then
+  echo "error: the url line was not rewritten; the cask layout changed" >&2
+  exit 1
+fi
+
 echo "$OWNER/headless-spotify/headless-spotify"

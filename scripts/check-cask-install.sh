@@ -13,6 +13,14 @@
 set -eu
 
 CASK="${1:?usage: check-cask-install.sh <owner>/<tap>/<cask>}"
+# owner/tap/cask. A short name resolves against whatever tap happens to be
+# tapped, which on a shared CI runner is not something to depend on — and the
+# empty string that an unfilled step output would produce is caught here rather
+# than as a confusing Homebrew error.
+case "$CASK" in
+  */*/*) ;;
+  *) echo "error: '$CASK' is not a fully qualified cask token (owner/tap/cask)" >&2; exit 1 ;;
+esac
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP="/Applications/headless-spotify.app"
 

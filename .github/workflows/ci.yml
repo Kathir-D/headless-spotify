@@ -16,7 +16,13 @@ jobs:
       - name: Package the release tarball
         run: ./scripts/package-release.sh
       - name: Stage the cask against the tarball this build just made
-        run: ./scripts/stage-cask-for-ci.sh
+        id: stage
+        run: |
+          # Not the step's stdout: `run:` only publishes what goes to
+          # $GITHUB_OUTPUT, and an empty cask token here would leave
+          # `brew style` with no file at all — which styles all of Homebrew
+          # and fails for reasons that have nothing to do with the cask.
+          echo "cask=$(./scripts/stage-cask-for-ci.sh)" >> "$GITHUB_OUTPUT"
       - name: Style the cask
         run: |
           # One offense is expected and unsatisfiable: Cask/InstallSteps on the
@@ -24,8 +30,7 @@ jobs:
           # exposes no way to run a command, and forbids suppressing the cop.
           # The cask says so at length where the block is; this is the one
           # command that checks everything else.
-          brew style --except Cask/InstallSteps \
-            "${{ steps.stage.outputs.cask }}"
+          brew style --except Cask/InstallSteps "${{ steps.stage.outputs.cask }}"
       - name: Audit the cask
         run: |
           # `brew audit` is the gate Homebrew actually enforces, and the only
@@ -52,7 +57,7 @@ jobs:
         run: ./scripts/package-release.sh
       - name: Stage the cask against that tarball
         id: stage
-        run: ./scripts/stage-cask-for-ci.sh
+        run: echo "cask=$(./scripts/stage-cask-for-ci.sh)" >> "$GITHUB_OUTPUT"
       - name: Install it, and check what actually landed
         run: ./scripts/check-cask-install.sh "${{ steps.stage.outputs.cask }}"
       - name: Uninstall it
