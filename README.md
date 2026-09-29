@@ -91,11 +91,11 @@ is kept separate and explicit.
 ### Direct download
 
 ```sh
-curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.1/headless-spotify-0.1.0-beta.1-macos.tar.gz
-curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.1/SHA256SUMS.txt
+curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.2/headless-spotify-0.1.0-beta.2-macos.tar.gz
+curl -fLO https://github.com/Kathir-D/headless-spotify/releases/download/v0.1.0-beta.2/SHA256SUMS.txt
 shasum -a 256 -c SHA256SUMS.txt
-tar -xzf headless-spotify-0.1.0-beta.1-macos.tar.gz
-cd headless-spotify-0.1.0-beta.1
+tar -xzf headless-spotify-0.1.0-beta.2-macos.tar.gz
+cd headless-spotify-0.1.0-beta.2
 sudo ./install.sh /Applications/Spotify.app
 ```
 
@@ -157,6 +157,7 @@ headless-spotify hide --mode plist # plist only
 headless-spotify hide --mode injector --injector /path/to/libHeadlessSpotifyInjector.dylib
 headless-spotify hide --dry-run    # print the plan, change nothing
 headless-spotify restore           # original plist (+ Apple signature) back, relaunch normally
+                                  # if there is nothing to restore it leaves Spotify running
 headless-spotify watch --interval 15            # persistence daemon
 headless-spotify watch --install-agent          # install + load LaunchAgent now
 headless-spotify watch --print-agent-plist      # show the agent definition
@@ -264,7 +265,7 @@ This project edits a signed system bundle, so the rules it holds itself to are s
 | --- | --- |
 | **A failed hide is rolled back** | If hiding does not verify, `install.sh` restores `Info.plist` and relaunches Spotify. It never leaves you with a Spotify that will not start, and it never exits "successfully" while Spotify is broken |
 | **A version that cannot be hidden is left alone** | After 3 failed attempts the watcher marks that Spotify version unhideable and stops touching it completely — no more quitting, no more re-signing. It only retries when Spotify's version actually changes |
-| **It never fights you** | `restore` is always available, works while hidden, and needs no arguments |
+| **It never fights you** | `restore` is always available, works while hidden, and needs no arguments. If there is nothing to restore it changes nothing and leaves Spotify running, so running it out of caution cannot interrupt playback |
 | **A stale backup is never applied** | If Spotify auto-updated while hidden, `restore` removes only the key we added instead of copying an old `Info.plist` over the new one. The original Apple signature cannot be recovered from a stale backup, and it says so |
 | **Uninstall stops everything first** | The watcher and the menu bar app are killed *before* the bundle is restored, so a running daemon cannot re-hide Spotify mid-uninstall |
 | **Your data and settings are never touched** | Only `LSUIElement` is written, and only the two files that are backed up first: `Contents/Info.plist` and `Contents/_CodeSignature/CodeResources` |
@@ -330,7 +331,7 @@ changes.
 
 ```sh
 swift build          # CLI + injector dylib + menu bar extra (Command Line Tools are enough)
-swift test           # 84 tests in 22 suites, all offline-safe (fixtures, stubbed runners)
+swift test           # 87 tests in 23 suites, all offline-safe (fixtures, stubbed runners)
 ./scripts/smoke-test.sh            # pre-release gate (pass --live to exercise real media controls)
 ./scripts/build-menubar.sh          # menu bar app bundle (debug: CONFIG=debug)
 ./scripts/package-release.sh       # versioned tarball + SHA256SUMS.txt (see VERSION)
