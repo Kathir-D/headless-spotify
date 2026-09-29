@@ -83,11 +83,11 @@ otherwise quit and relaunch a perfectly good Spotify every few minutes).
 ### Homebrew (recommended)
 
 ```sh
-brew tap Kathir-D/tap
 brew install --cask kathir-d/tap/headless-spotify
 ```
 
-That is one command and no `sudo`, and it leaves three things behind:
+One command, no `sudo`, no `brew tap` preamble, no `brew trust`. It leaves
+three things behind:
 
 | What | Where |
 | --- | --- |
@@ -110,10 +110,12 @@ it is what it should have been all along: `brew install` installs your app, and
 README to discover the app exists.
 
 `Kathir-D/tap` is the same tap that ships [Sonar](https://github.com/Kathir-D/Sonar)
-and [Stockroom](https://github.com/Kathir-D/Stockroom). No `brew trust` step is
-needed: the command above names its tap, and Homebrew trusts a cask named with
-its tap before resolving it. The `brew tap` line is only there so `brew update`
-can see new releases and `brew upgrade` has something to upgrade.
+and [Stockroom](https://github.com/Kathir-D/Stockroom). There is deliberately no
+`brew tap` or `brew trust` line: a fully qualified `user/tap/name` makes
+Homebrew tap the repository and trust the cask before resolving it, so
+`brew update` and `brew upgrade --cask` work straight afterwards. Add
+`brew trust --tap Kathir-D/tap` only if you want short names like
+`brew install --cask sonar`, which identify nothing.
 
 > ⛔ **Read this before you run the `sudo` command, if you are on Spotify ≥1.3.1**
 > (verified 2026-09-28, macOS 26 — that is the current version). Spotify quits
