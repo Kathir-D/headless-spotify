@@ -16,6 +16,9 @@ public enum MenuAction: Sendable, Equatable {
     case none
     /// Enable hiding if it is off, disable it if it is on.
     case toggleHiding
+    /// Ask macOS for permission to control Spotify. Sending the Apple Event is
+    /// what makes the system prompt appear.
+    case requestAutomation
     case quit
 }
 
@@ -53,6 +56,7 @@ public struct MenuItemSpec: Sendable, Equatable {
 
     public var isQuit: Bool { action == .quit }
     public var isToggle: Bool { action == .toggleHiding }
+    public var isPermissionRequest: Bool { action == .requestAutomation }
 }
 
 public enum MenuBarModel: Sendable {
@@ -67,6 +71,19 @@ public enum MenuBarModel: Sendable {
     public static let toggleTitle = "Hidden from Dock"
     public static let busyTitle = "Working…"
     public static let cliMissingTitle = "\(projectName) CLI not found"
+
+    /// The permission row, when there is something to say.
+    ///
+    /// `.unknown` deliberately produces no row. It is the sub-second state
+    /// before the first probe, and a row that appears and then changes under the
+    /// user's cursor is worse than one that is briefly absent.
+    public static func permissionTitle(for state: AutomationState) -> String? {
+        switch state {
+        case .unknown, .granted: return nil
+        case .needsGrant: return Automation.permissionTitle
+        case .refused: return Automation.blockedTitle
+        }
+    }
 
     /// Icon for the current state, so the top bar shows it without opening
     /// the menu. A missing symbol falls back to the text title in the glue.
@@ -101,12 +118,14 @@ public enum MenuBarModel: Sendable {
     ///   - cliAvailable: a `headless-spotify` binary was found to drive.
     ///   - busy: a toggle is already running; the row is disabled meanwhile.
     ///   - message: optional one-line result from the last toggle.
+    ///   - automation: whether this app may control Spotify yet.
     public static func menuItems(
         version: String,
         hidingEnabled: Bool = false,
         cliAvailable: Bool = true,
         busy: Bool = false,
-        message: String? = nil
+        message: String? = nil,
+        automation: AutomationState = .unknown
     ) -> [MenuItemSpec] {
         let toggle: MenuItemSpec
         if !cliAvailable {
@@ -127,8 +146,23 @@ public enum MenuBarModel: Sendable {
         var items: [MenuItemSpec] = [
             MenuItemSpec(title: "\(projectName) \(version)", isEnabled: false),
             MenuItemSpec(title: "", isSeparator: true, isEnabled: false),
-            toggle,
         ]
+        // Above the toggle, not below it. A missing permission makes the toggle
+        // do nothing, so burying the explanation under the thing that does
+        // nothing is how this gets missed.
+        if let title = permissionTitle(for: automation) {
+            items.append(
+                MenuItemSpec(
+                    title: title,
+                    // A refused permission has no button that can work; sending
+                    // the event would silently do nothing, which is the exact
+                    // confusion this row exists to remove.
+                    isEnabled: automation.canPrompt,
+                    action: automation.canPrompt ? .requestAutomation : .none
+                )
+            )
+        }
+        items.append(toggle)
         if let message {
             items.append(MenuItemSpec(title: message, isEnabled: false))
         }
@@ -192,6 +226,101 @@ public enum CLILocator: Sendable {
         exists: (String) -> Bool
     ) -> String? {
         candidates(env: env, barExecutablePath: barExecutablePath).first(where: exists)
+    }
+}
+
+// MARK: - Automation permission
+
+/// Whether this app is allowed to send Apple Events to Spotify.
+///
+/// Every control path in this project runs `osascript`, and the *responsible
+/// process* for a TCC check is whatever launched the script. Run from a
+/// terminal, that is the terminal. Run from this menu bar extra, it is this app
+/// — so this app needs its own grant, and the user's terminal having one does
+/// nothing for it.
+///
+/// The failure without a grant is quiet and confusing: the CLI runs, exits
+/// non-zero with an AppleScript error on stderr, and the menu shows that
+/// message. Nothing says "you need to allow this app to control Spotify",
+/// because macOS only ever prompts when something actually asks — and the one
+/// thing that asks is a real Apple Event, which we deliberately did not send
+/// from a background timer. So the app asks the user instead, through a menu
+/// row, and the click is what sends the event.
+public enum AutomationState: Sendable, Equatable {
+    /// Not read yet.
+    case unknown
+    /// Allowed.
+    case granted
+    /// Never asked, so the OS will still prompt on the next real event.
+    case needsGrant
+    /// Refused, or otherwise blocked: the OS will not prompt again, and only
+    /// System Settings can change it.
+    case refused
+
+    public var isGranted: Bool { self == .granted }
+    /// True when asking again can still do something.
+    public var canPrompt: Bool { self == .needsGrant }
+}
+
+/// The Apple Event half of the permission, kept here so the state machine is
+/// testable and the spawning stays in one place.
+public enum Automation: Sendable {
+    public static let osascript = "/usr/bin/osascript"
+    public static let spotifyBundleID = "com.spotify.client"
+    /// Reads one property and nothing else. It is the cheapest Apple Event
+    /// available, it is the same call the CLI makes, and using the same call is
+    /// the point: a permission probe that asked a *different* question could
+    /// disagree with the command that then fails.
+    public static let probeScript = "tell application \"Spotify\" to get player state"
+    public static let permissionTitle = "Allow control of Spotify"
+    public static let blockedTitle = "Control of Spotify is blocked"
+    public static let permissionMessage =
+        "headless-spotify needs permission to control Spotify so it can read what is playing. "
+            + "macOS will ask. Choose OK."
+    public static let blockedMessage =
+        "macOS will not ask again. Turn it on in System Settings › Privacy & Security › Automation."
+
+    /// Map what `osascript` reported to a state.
+    ///
+    /// The numbers are the OSStatus values Apple puts in the script error
+    /// message, and they are matched as numbers rather than prose because the
+    /// prose is localised and the numbers are not.
+    ///
+    /// The fallbacks differ from `classify` on purpose. A probe that failed for
+    /// a reason we do not recognise has learned *nothing*, so it reads as
+    /// `.unknown` and shows no row; reading it as `.granted` would hide a real
+    /// missing grant, and reading it as `.refused` would send a user to System
+    /// Settings for a permission that was never refused.
+    public static func state(exitCode: Int32, standardError: String) -> AutomationState {
+        guard exitCode != 0 else { return .granted }
+        return classify(standardError) ?? .unknown
+    }
+
+    /// The permission a piece of output implicates, or nil when it implicates
+    /// none.
+    ///
+    /// This is the backstop the probe cannot be. Apple Events are checked
+    /// against the *responsible process* and inherit down the process chain, so
+    /// a probe spawned from an app that was itself launched from an
+    /// already-authorised terminal succeeds whether or not the app itself holds
+    /// a grant — measured on this machine, which is why a live prompt could not
+    /// be provoked here. When a real command does fail on the permission, its
+    /// own output is the trustworthy evidence, and without this the user gets a
+    /// raw `(-1743)` line and no idea what to do about it.
+    public static func classify(_ output: String) -> AutomationState? {
+        if output.contains("-1743") { return .refused }
+        // -1744: the OS would prompt, so a click can still fix it.
+        if output.contains("-1744") { return .needsGrant }
+        // -600: Spotify is not running. There is no grant to make yet, which is
+        // not a permission problem and must not be shown as one.
+        if output.contains("-600") { return nil }
+        return nil
+    }
+
+    /// The permission state a failed command implies, or nil when the failure
+    /// was something else entirely.
+    public static func failureState(output: String) -> AutomationState? {
+        classify(output)
     }
 }
 

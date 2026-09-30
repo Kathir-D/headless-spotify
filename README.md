@@ -14,6 +14,8 @@ Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — win
 - [Requirements](#requirements)
 - [Install](#install)
   - [Homebrew (recommended)](#homebrew-recommended)
+    - [Permissions](#permissions)
+    - [If Spotify is still in the Dock](#if-spotify-is-still-in-the-dock)
   - [Direct download](#direct-download)
   - [Build from source](#build-from-source)
   - [What install.sh does](#what-installsh-does)
@@ -87,28 +89,28 @@ otherwise quit and relaunch a perfectly good Spotify every few minutes).
 brew install --cask kathir-d/tap/headless-spotify
 ```
 
-One command, no `sudo`, no `brew tap` preamble, no `brew trust`. It leaves
-three things behind:
+One command. No `sudo` to type, no `brew tap` preamble, no `brew trust`, and
+nothing else to run afterwards. It leaves three things behind:
 
 | What | Where |
 | --- | --- |
-| **The menu bar extra**, already running — look for the headless-spotify icon in the top bar | `/Applications/headless-spotify.app` |
+| **The menu bar extra**, already running — look for the music note in the top bar | `/Applications/headless-spotify.app` |
 | The `headless-spotify` CLI | `$(brew --prefix)/bin` |
 | The privileged install helper, bundled with the app | `/Applications/headless-spotify.app/Contents/Resources/install.sh` |
 
-Nothing has touched Spotify yet, and that is deliberate — see
-[Current status](#current-status) for what the next command will and will not
-do. Hiding edits a root-owned, signed system bundle, so it is the one step that
-needs `sudo`:
+### Permissions
 
-```sh
-sudo /Applications/headless-spotify.app/Contents/Resources/install.sh
-```
+The app asks for them, rather than leaving you to find out you needed them.
 
-That is the whole privileged surface. It is the *only* thing behind `sudo`, and
-it is what it should have been all along: `brew install` installs your app, and
-`install.sh` edits Spotify. You never have to read a `sudo` command in a tap
-README to discover the app exists.
+Everything here drives Spotify through AppleScript, and macOS only ever prompts
+when something actually asks. So the app asks on launch: if it is not yet
+allowed to control Spotify, **Allow control of Spotify** appears in its menu and
+clicking it raises the system dialog. There is no `sudo` command to copy out of
+a README, and no failure to diagnose after the fact.
+
+A refused permission cannot be re-asked — macOS will not prompt twice — so the
+row then says so and points at System Settings, and clicking it is disabled
+rather than silently doing nothing.
 
 `Kathir-D/tap` is the same tap that ships [Sonar](https://github.com/Kathir-D/Sonar)
 and [Stockroom](https://github.com/Kathir-D/Stockroom). There is deliberately no
@@ -117,6 +119,27 @@ Homebrew tap the repository and trust the cask before resolving it, so
 `brew update` and `brew upgrade --cask` work straight afterwards. Add
 `brew trust --tap Kathir-D/tap` only if you want short names like
 `brew install --cask sonar`, which identify nothing.
+
+### If Spotify is still in the Dock
+
+Nothing is broken, and nothing is half-done. Hiding works by setting
+`LSUIElement` in Spotify's `Info.plist` and re-signing the bundle, and **Spotify
+1.3.1 and newer quit on launch whenever that key is present** — so the edit
+provably cannot work there. The cask reads Spotify's version and *skips* the
+edit rather than applying it and then half-undoing it, because a bundle cannot be
+given back Spotify's Developer ID signature by anything on this machine.
+
+`headless-spotify status` reports the same thing without prose:
+
+```
+LSUIElement: absent (normal)
+Dock: visible (regular)
+Headless: no — scriptable: yes
+```
+
+Everything else works now and will keep working: the menu bar toggle, `status`,
+`restore`, `control`, and the watcher. If a future Spotify honours the key again,
+no code change is needed — only this note.
 
 > ⛔ **Read this before you run the `sudo` command, if you are on Spotify ≥1.3.1**
 > (verified 2026-09-28, macOS 26 — that is the current version). Spotify quits
@@ -305,7 +328,7 @@ headless-spotify-bar --print-menu-spec      # show the menu without a GUI
 headless-spotify-bar --print-menu-spec --hiding-enabled   # pin the state (for tests)
 ```
 
-It is packaged as an `LSUIElement` app, so it has no Dock icon and no Cmd-Tab entry — the same trick applied to Spotify — and it needs no Accessibility or Automation permission. Everything else stays on the CLI on purpose: a status bar app that duplicated every subcommand would drift from the real behaviour.
+It is packaged as an `LSUIElement` app, so it has no Dock icon and no Cmd-Tab entry — the same trick applied to Spotify. It needs no Accessibility permission, and it asks for the one Apple Events permission it does need rather than assuming it: see [Permissions](#permissions). Everything else stays on the CLI on purpose: a status bar app that duplicated every subcommand would drift from the real behaviour.
 
 The bundle also carries `install.sh`, `uninstall.sh`, the injector dylib and the watcher
 LaunchAgent definition in `Contents/Resources`, so the one privileged command is always
@@ -395,8 +418,9 @@ reports not-headless, `restore` returns to normal).
 | Clicking **Hidden from Dock** pops up "Apple could not verify 'headless-spotify' is free of malware", and the menu then does nothing | Fixed in `0.1.0-beta.4`. Before that, the cask cleared Gatekeeper's quarantine from the app but not from the CLI it links into `$(brew --prefix)/bin`, and a menu bar app is a GUI process — a GUI process running a quarantined binary hangs inside `dyld` behind that alert | Upgrade, or reinstall: `brew reinstall --cask kathir-d/tap/headless-spotify`. From `0.1.0-beta.4` the app also repairs a leftover-quarantine CLI by itself before running it |
 | `hide` exits 1, Spotify won't stay launched headless | Spotify ≥1.3.1 quits when `LSUIElement=true` is present | Run `headless-spotify restore`; track Spotify releases — no code change needed if they honor the key again |
 | Dock icon back after Spotify update | Updates rewrite `Info.plist` | Watcher re-applies automatically; or re-run `headless-spotify hide` |
-| Opening Sonar brings Spotify back into the Dock | Same Spotify ≥1.3.1 limitation as the row above: Sonar launches Spotify, Spotify quits on launch with `LSUIElement` set, and the rollback restores a normal Dock icon | `headless-spotify restore` stops the loop, or wait for Spotify to honor the key again |
-| `hide` says bundle not writable | Root-owned `/Applications` copy | Run the one sudo step: `sudo /Applications/headless-spotify.app/Contents/Resources/install.sh` |
+| Opening Sonar brings Spotify back into the Dock | Same Spotify ≥1.3.1 limitation: Sonar launches Spotify, Spotify quits on launch with `LSUIElement` set, and the rollback restores a normal Dock icon | Nothing to undo — the cask skips the edit on a blocked Spotify, so there is nothing to roll back. See [If Spotify is still in the Dock](#if-spotify-is-still-in-the-dock) |
+| A row says **Allow control of Spotify** and clicking it does nothing | macOS already refused once and will not prompt again | System Settings › Privacy & Security › Automation › headless-spotify |
+| `hide` says bundle not writable | Root-owned `/Applications` copy | The cask already ran the privileged step; if you got here from a tarball, run `sudo ./install.sh /Applications/Spotify.app` |
 | Spotify won't launch after `hide` | Edited bundle, re-sign failed | Re-run `hide` (look for the re-sign error), or `restore` + reinstall Spotify |
 | `restore` warns signature invalid | Seal files diverge (e.g. manual edits after backup) | Reinstall Spotify from spotify.com, then `hide` again |
 | First `status`/`hide` prompts for automation access | macOS asks once before `osascript` may control Spotify | Allow it; afterwards everything is non-interactive |

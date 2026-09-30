@@ -89,6 +89,94 @@ private func repairQuarantineIfNeeded(cli: String) async -> String? {
     return "Cleared Gatekeeper quarantine on the CLI"
 }
 
+// MARK: - The Automation permission
+
+/// Read whether macOS lets this app control Spotify, without blocking the menu.
+///
+/// Implemented as one `osascript` run rather than
+/// `AEDeterminePermissionToAutomateTarget`. That was the first attempt and it
+/// is wrong: measured on this machine, the AE call does not return within eight
+/// seconds when made from a process without a full app bundle, so calling it
+/// from `menuWillOpen` would hang the menu on a thread that cannot be
+/// interrupted. The Apple Event route also has nothing to gain: the CLI already
+/// drives Spotify through `osascript`, so asking through the same mechanism is
+/// the only answer that cannot disagree with the command that then fails.
+///
+/// The first run of this *is* the request — sending a real Apple Event is what
+/// makes macOS prompt, and there is no API to ask without sending one. It is
+/// run off the main thread with a timeout, and its result is published back on
+/// the main actor.
+private func probeAutomation(
+    completion: @escaping @MainActor (AutomationState) -> Void
+) {
+    DispatchQueue.global(qos: .utility).async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: Automation.osascript)
+        process.arguments = ["-e", Automation.probeScript]
+        let pipe = Pipe()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = pipe
+        do {
+            try process.run()
+        } catch {
+            Task { @MainActor in completion(.unknown) }
+            return
+        }
+        // Drain stderr on its own queue. `readDataToEndOfFile` blocks until the
+        // pipe closes, so reading it on this thread would defeat the timeout
+        // entirely — and polling `availableData` instead is a guess about
+        // whether the writer has flushed yet, which is not a question worth
+        // asking about an error message that decides the UI.
+        //
+        // A box rather than a captured `var`: Swift 6 will not let two
+        // concurrent closures touch one, and the alternative — a lock — is
+        // strictly more machinery for one string written once and read once.
+        final class Box: @unchecked Sendable { var text = "" }
+        let captured = Box()
+        let collector = DispatchQueue(label: "headless-spotify.probe")
+        collector.async {
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            captured.text = String(data: data, encoding: .utf8) ?? ""
+        }
+        // A timeout, because the very first call is what raises the system
+        // dialog, and that call blocks until the dialog is answered. With no one
+        // at the keyboard that is unbounded, and this process must stay
+        // killable.
+        let deadline = Date().addingTimeInterval(30)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        guard !process.isRunning else {
+            process.terminate()
+            Task { @MainActor in completion(.unknown) }
+            return
+        }
+        // The writer has closed, so the reader finishes on its own; wait for it
+        // rather than racing it.
+        collector.sync {}
+        let state = Automation.state(exitCode: process.terminationStatus, standardError: captured.text)
+        Task { @MainActor in completion(state) }
+    }
+}
+
+/// Ask macOS for permission to control Spotify.
+///
+/// The status item is an `LSUIElement` app: no Dock icon, no window, so there
+/// is nothing the user could click to bring the system dialog forward. The
+/// caller activates the app first; that is the whole reason this is more than
+/// "run the script".
+private func requestAutomationGrant() {
+    DispatchQueue.global(qos: .userInitiated).async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: Automation.osascript)
+        process.arguments = ["-e", Automation.probeScript]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+    }
+}
+
 // MARK: - Menu controller
 
 @MainActor
@@ -97,13 +185,43 @@ final class MenuController: NSObject, NSMenuDelegate {
     private var cli: String?
     private var isBusy = false
     private var message: String?
+    private var automation: AutomationState = .unknown
     private weak var button: NSStatusBarButton?
+    /// Set while a probe is in flight, so opening the menu twice does not leave
+    /// two `osascript` processes competing over the same prompt.
+    private var isProbing = false
 
     func attach(to statusItem: NSStatusItem) {
         menu.delegate = self
         button = statusItem.button
         rebuild()
         statusItem.menu = menu
+        // Once, shortly after launch. macOS only prompts once per
+        // (client, target) pair, so this is the one chance to ask — and asking
+        // at launch is the only time it happens without the user having already
+        // hit a failure and gone looking for the cause.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.refreshAutomation()
+        }
+    }
+
+    /// Re-read the permission, off the main thread.
+    ///
+    /// Skipped once granted. Re-probing a granted app would send an Apple Event
+    /// on every menu open for a state that cannot change without the user
+    /// visiting System Settings. `.needsGrant` and `.refused` *are* re-read,
+    /// because the user answers the dialog and comes straight back to this menu
+    /// and the row has to be gone by then.
+    private func refreshAutomation(force: Bool = false) {
+        guard !isProbing else { return }
+        if !force, automation == .granted { return }
+        isProbing = true
+        probeAutomation { [weak self] state in
+            guard let self else { return }
+            self.isProbing = false
+            self.automation = state
+            self.rebuild()
+        }
     }
 
     /// Recompute state every time the menu opens, so the label and the icon
@@ -112,6 +230,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         cli = cliPath()
         message = nil
+        refreshAutomation()
         rebuild()
     }
 
@@ -140,7 +259,8 @@ final class MenuController: NSObject, NSMenuDelegate {
             hidingEnabled: currentHidingState(),
             cliAvailable: cli != nil,
             busy: isBusy,
-            message: message
+            message: message,
+            automation: automation
         ) {
             if spec.isSeparator {
                 menu.addItem(.separator())
@@ -152,6 +272,9 @@ final class MenuController: NSObject, NSMenuDelegate {
                 break
             case .toggleHiding:
                 item.action = #selector(toggleHiding(_:))
+                item.target = self
+            case .requestAutomation:
+                item.action = #selector(grantAutomation(_:))
                 item.target = self
             case .quit:
                 item.action = #selector(NSApplication.terminate(_:))
@@ -165,6 +288,24 @@ final class MenuController: NSObject, NSMenuDelegate {
             case .off: .off
             }
             menu.addItem(item)
+        }
+    }
+
+    /// Ask macOS for permission to control Spotify.
+    ///
+    /// The status item is an `LSUIElement` app: it has no Dock icon and no
+    /// window, so there is nothing the user could click to bring the system
+    /// dialog to the front. Activating first is the whole reason this is more
+    /// than "run the script".
+    @objc private func grantAutomation(_ sender: Any?) {
+        message = Automation.permissionMessage
+        rebuild()
+        NSApp.activate(ignoringOtherApps: true)
+        requestAutomationGrant()
+        // Re-read after the dialog closes, so the row disappears on its own
+        // rather than waiting for the user to open the menu again.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.refreshAutomation(force: true)
         }
     }
 
@@ -206,6 +347,16 @@ final class MenuController: NSObject, NSMenuDelegate {
                     self?.message = repair
                 } else if let repair {
                     self?.message = MenuBarModel.statusMessage("\(repair); \(result.output)")
+                } else if let blocked = Automation.failureState(output: result.output) {
+                    // The command failed on the Apple Events permission. The
+                    // probe can miss this — the grant is checked against the
+                    // responsible process and inherits down the chain — so the
+                    // command's own output is the evidence, and it is turned
+                    // into a row the user can act on rather than a raw -1743.
+                    self?.automation = blocked
+                    self?.message = MenuBarModel.statusMessage(
+                        blocked == .refused ? Automation.blockedMessage : Automation.permissionMessage
+                    )
                 } else {
                     self?.message = MenuBarModel.statusMessage(result.output)
                 }
@@ -240,8 +391,6 @@ final class MenuController: NSObject, NSMenuDelegate {
         return (true, "")
     }
 }
-
-// MARK: - Entry point
 
 // `--print-menu-spec` mirrors `watch --print-agent-plist`: a hermetic,
 // GUI-free view of the menu, used by scripts/smoke-test.sh. It reflects the

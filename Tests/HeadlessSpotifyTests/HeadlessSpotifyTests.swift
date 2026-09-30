@@ -660,6 +660,120 @@ struct MenuBarToggleTests {
         #expect(off[4].isQuit && off[4].isEnabled)
     }
 
+    @Test("a granted Automation shows no extra row")
+    func noPermissionRowWhenGranted() {
+        let items = MenuBarModel.menuItems(version: "1.0", automation: .granted)
+        #expect(items.count == 5, "granted must not change the menu")
+        #expect(!items.contains { $0.isPermissionRequest })
+    }
+
+    @Test("an unread Automation shows no row either")
+    func noPermissionRowWhenUnknown() {
+        // A row that appears and then vanishes under the cursor is worse than
+        // one that is briefly absent.
+        let items = MenuBarModel.menuItems(version: "1.0", automation: .unknown)
+        #expect(items.count == 5)
+        #expect(!items.contains { $0.isPermissionRequest })
+    }
+
+    @Test("a missing Automation offers a clickable row above the toggle")
+    func permissionRowWhenNeeded() {
+        let items = MenuBarModel.menuItems(version: "1.0", automation: .needsGrant)
+        #expect(items.count == 6)
+        let row = items[2]
+        #expect(row.isPermissionRequest)
+        #expect(row.isEnabled, "clicking is what makes macOS prompt")
+        #expect(row.title == Automation.permissionTitle)
+        // Above the toggle: a missing permission makes the toggle do nothing,
+        // so the explanation must not be buried under the thing that does
+        // nothing.
+        #expect(items[3].isToggle)
+    }
+
+    @Test("a refused Automation explains itself and is not clickable")
+    func permissionRowWhenRefused() {
+        let items = MenuBarModel.menuItems(version: "1.0", automation: .refused)
+        let row = items[2]
+        #expect(row.title == Automation.blockedTitle)
+        #expect(!row.isEnabled, "a refused grant cannot be re-requested")
+        #expect(!row.isPermissionRequest, "clicking would silently do nothing")
+    }
+
+    @Test("the permission row sits between the separator and the toggle")
+    func permissionRowPlacement() {
+        let items = MenuBarModel.menuItems(version: "1.0", message: "hi", automation: .needsGrant)
+        #expect(items[0].title.hasPrefix("headless-spotify"))
+        #expect(items[1].isSeparator)
+        #expect(items[2].isPermissionRequest)
+        #expect(items[3].isToggle)
+        #expect(items[4].title == "hi")
+        #expect(items[5].isSeparator)
+        #expect(items[6].isQuit)
+    }
+
+    @Test("Automation state helpers")
+    func automationHelpers() {
+        #expect(AutomationState.granted.isGranted)
+        #expect(!AutomationState.unknown.isGranted)
+        #expect(AutomationState.needsGrant.canPrompt)
+        #expect(!AutomationState.refused.canPrompt, "the OS will not ask again")
+        #expect(!AutomationState.granted.canPrompt)
+        #expect(Automation.spotifyBundleID == "com.spotify.client")
+    }
+
+    @Test("the permission copy names the app and the choice")
+    func permissionCopy() {
+        #expect(Automation.permissionTitle.localizedCaseInsensitiveContains("spotify"))
+        #expect(Automation.permissionMessage.contains("OK"))
+        #expect(Automation.blockedMessage.contains("System Settings"))
+    }
+
+    @Test("a successful probe means granted")
+    func probeGranted() {
+        #expect(Automation.state(exitCode: 0, standardError: "") == .granted)
+    }
+
+    @Test("-1743 is a refusal, and cannot be re-asked")
+    func probeRefused() {
+        let err = "execution error: Not authorized to send Apple events to «application Spotify». (-1743)"
+        #expect(Automation.state(exitCode: 1, standardError: err) == .refused)
+    }
+
+    @Test("-1744 means the OS would still prompt, so a click can fix it")
+    func probeNeedsGrant() {
+        let err = "execution error: (-1744)"
+        #expect(Automation.state(exitCode: 1, standardError: err) == .needsGrant)
+    }
+
+    @Test("Spotify not running is not a permission problem")
+    func probeTargetNotRunning() {
+        // Must not read as a denial: sending a user to System Settings for a
+        // grant that does not exist yet is the failure this avoids.
+        let err = "execution error: Can't get application \"Spotify\". (-600)"
+        #expect(Automation.state(exitCode: 1, standardError: err) == .unknown)
+    }
+
+    @Test("an unrecognised failure shows no row rather than a wrong one")
+    func probeUnknown() {
+        #expect(Automation.state(exitCode: 1, standardError: "") == .unknown)
+        #expect(Automation.state(exitCode: 127, standardError: "not found") == .unknown)
+        #expect(Automation.state(exitCode: 1, standardError: "something else entirely") == .unknown)
+    }
+
+    @Test("the status codes are matched as numbers, not prose")
+    func probeMatchesNumbers() {
+        // The prose is localised; the numbers are not. A probe that matched the
+        // English message would report "granted" on a non-English system.
+        let localised = "execution error: Nicht autorisiert, Apple-Events zu senden. (-1743)"
+        #expect(Automation.state(exitCode: 1, standardError: localised) == .refused)
+    }
+
+    @Test("the probe script is the one the CLI uses")
+    func probeScriptShape() {
+        #expect(Automation.probeScript.contains("get player state"))
+        #expect(Automation.osascript == "/usr/bin/osascript")
+    }
+
     @Test("missing CLI disables the toggle instead of failing")
     func missingCLI() {
         let items = MenuBarModel.menuItems(version: "1.0", hidingEnabled: false, cliAvailable: false)
@@ -1272,5 +1386,45 @@ struct QuarantineTests {
         for call in fake.calls {
             #expect(call.arguments.last == cli, "every call must name exactly the CLI: \(call)")
         }
+    }
+}
+
+@Suite("Automation permission recovered from a failed command")
+struct AutomationFailureTests {
+    @Test("a permission error in command output becomes an actionable row")
+    func refusalBecomesRow() {
+        // The real shape of what `hide` prints when osascript is not allowed.
+        let output = """
+            hide: Spotify did not answer AppleScript within 10s
+            execution error: Not authorized to send Apple events to «application Spotify». (-1743)
+            """
+        let state = Automation.failureState(output: output)
+        #expect(state == .refused)
+        let items = MenuBarModel.menuItems(version: "1.0", message: Automation.blockedMessage, automation: state!)
+        #expect(items.count == 7, "name, sep, permission, toggle, message, sep, quit")
+        #expect(items[2].title == Automation.blockedTitle)
+        #expect(!items[2].isEnabled)
+    }
+
+    @Test("a -1744 failure offers the clickable grant row")
+    func needsGrantBecomesClickableRow() {
+        let state = Automation.failureState(output: "execution error: (-1744)")
+        #expect(state == .needsGrant)
+        let items = MenuBarModel.menuItems(version: "1.0", automation: state!)
+        #expect(items[2].isPermissionRequest)
+        #expect(items[2].isEnabled, "the OS will still prompt, so the click must work")
+    }
+
+    @Test("an ordinary failure is not blamed on permissions")
+    func ordinaryFailureIsNotAPermissionProblem() {
+        #expect(Automation.failureState(output: "hide: plist is not writable") == nil)
+        #expect(Automation.failureState(output: "Spotify is not installed") == nil)
+        #expect(Automation.failureState(output: "") == nil)
+    }
+
+    @Test("Spotify not running is not blamed on permissions either")
+    func targetNotRunningIsNotAPermissionProblem() {
+        // -600 must not raise a row: there is no grant to make.
+        #expect(Automation.failureState(output: "Can't get application \"Spotify\". (-600)") == nil)
     }
 }
