@@ -21,7 +21,7 @@
 # file into the Kathir-D/homebrew-tap tap — do not hand-edit them.
 cask "headless-spotify" do
   version "0.1.0-beta.4"
-  sha256 "2430b62084e3e1c2a116f68e27cbda630e2f0de9d6b4d07e45371ea10054189b"
+  sha256 "ffbba2804f5c7a7c1fb989a3e31fa0d87d5fbb56f5bebe42dc9b16002ec3bb52"
 
   url "https://github.com/Kathir-D/headless-spotify/releases/download/v#{version}/headless-spotify-#{version}-macos.tar.gz"
   name "headless-spotify"
