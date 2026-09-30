@@ -44,15 +44,22 @@ OWNER="$(printf '%s' "${GITHUB_REPOSITORY_OWNER:-kathir-d}" | tr '[:upper:]' '[:
 TAPDIR="$(brew --repository)/Library/Taps/$OWNER/homebrew-headless-spotify"
 mkdir -p "$TAPDIR/Casks"
 
-# Only the two lines that name the release move; `url` interpolates
-# #{version}, so the download follows the version on its own.
-sed -e "s|^  sha256 \".*\"|  sha256 \"$SHA\"|" \
+# Only the lines that name the release move. `version` has to follow VERSION
+# too: the checked-in cask still names the last published release until
+# release.yml bumps it after tagging, so on a version-bump commit the `app`
+# stanza would otherwise look for a directory named after the old version.
+sed -e "s|^  version \".*\"|  version \"$VERSION\"|" \
+    -e "s|^  sha256 \".*\"|  sha256 \"$SHA\"|" \
     -e "s|^  url \"https://github.com.*|  url \"file://$SCRIPT_DIR/dist/$TARBALL\"|" \
     Casks/headless-spotify.rb > "$TAPDIR/Casks/headless-spotify.rb"
 
 # A sed that quietly matches nothing leaves a cask pointing at a release whose
 # checksum it does not have, and every check downstream then either fails for
 # the wrong reason or — worse — passes against a download it never looked at.
+if ! grep -q "^  version \"$VERSION\"$" "$TAPDIR/Casks/headless-spotify.rb"; then
+  echo "error: the version line was not rewritten; the cask layout changed" >&2
+  exit 1
+fi
 if ! grep -q "^  sha256 \"$SHA\"$" "$TAPDIR/Casks/headless-spotify.rb"; then
   echo "error: the sha256 line was not rewritten; the cask layout changed" >&2
   exit 1
