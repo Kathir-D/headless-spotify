@@ -23,7 +23,10 @@ Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — win
 - [Menu bar extra](#menu-bar-extra)
 - [How it works](#how-it-works)
 - [What it will not do to your Spotify](#what-it-will-not-do-to-your-spotify)
-- [Sonar compatibility](#sonar-compatibility)
+- [Companions](#companions)
+  - [Sonar](#sonar)
+  - [Works with trak](#works-with-trak)
+  - [`status --json` contract](#status---json-contract)
 - [Troubleshooting](#troubleshooting)
 - [Uninstall](#uninstall)
 - [Developing](#developing)
@@ -40,6 +43,7 @@ Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — win
 - **Keeps the Spotify contract intact**: process stays `com.spotify.client`, scripting dictionary untouched — Sonar matches by bundleID + `player state` only.
 - **Two hiding methods with automatic fallback** (`hide --mode auto`, the default): `LSUIElement` plist mode first, accessory-policy injector second.
 - **Watcher daemon** (LaunchAgent) re-applies hiding when Spotify self-updates or the Dock icon returns.
+- **Background launch** (`launch`): starts Spotify without activating it and waits for `player state`; a no-op if Spotify is already running. Never edits `Info.plist`, never needs `sudo`.
 - **Media passthrough** (`control play|pause|toggle|next|previous|volume|…`) using the same AppleScript Sonar uses — never launches Spotify as a side effect.
 - **Menu bar extra**: a top-bar icon whose menu shows the project name, an **Enable/Disable hiding** toggle that drives the same CLI, and Quit. It is itself `LSUIElement`, so it has no Dock icon and no Cmd-Tab entry. `brew install --cask` puts it in `/Applications` and starts it — no `sudo`, and it does not wait for hiding to work.
 - **An app icon in Sonar's colourway**: a macOS squircle with a disc ramped 45° from `#5BCEFA` to `#F5A9B8` and a white music note in the middle — the same mark the top bar shows. It is drawn by `scripts/make-icon.swift` on every build rather than checked in as a bitmap, so the colours are a one-line edit.
@@ -255,7 +259,9 @@ Two behaviours are worth stating outright, because both used to surprise people:
 
 ```sh
 headless-spotify status            # Dock? LSUIElement? player state? (exit 0 only when headless+scriptable)
-headless-spotify status --json     # machine-readable, for Sonar/scripts
+headless-spotify status --json     # machine-readable, versioned ("schema": 1), for Sonar/trak/scripts
+headless-spotify launch            # start Spotify in the background, wait ≤10 s for `player state`
+                                  # no-op if already running; never edits Info.plist, no sudo
 headless-spotify hide              # auto: plist → injector fallback
 headless-spotify hide --mode plist # plist only
 headless-spotify hide --mode injector --injector /path/to/libHeadlessSpotifyInjector.dylib
@@ -392,9 +398,20 @@ This project edits a signed system bundle, so the rules it holds itself to are s
 
 [⬆ Back to top](#headless-spotify)
 
-## Sonar compatibility
+## Companions
 
 [⬆ Back to top](#headless-spotify)
+
+headless-spotify never changes Spotify's bundle ID or scripting dictionary,
+so anything that drives Spotify over AppleScript keeps working. Two companion
+tools are known to work with it:
+
+| Tool | What it is | What it uses from headless-spotify |
+|---|---|---|
+| [Sonar](https://github.com/Kathir-D/sonar) | Spotify controller | Nothing — it matches `com.spotify.client` + `player state`, same as normal Spotify |
+| [trak](https://github.com/Kathir-D/trak) | Terminal UI for Spotify | `status --json` for its "headless" badge; `launch` to start Spotify without stealing focus |
+
+### Sonar
 
 | Spotify mode | Sonar sees it | Control |
 |---|---|---|
@@ -406,6 +423,59 @@ Both headless modes keep the same bundle ID and scripting dictionary, so
 Sonar needs no changes between rows. Today, only the Normal row runs on
 Spotify 1.3.1; the CLI enforces this honestly (`hide` exits 1, `status`
 reports not-headless, `restore` returns to normal).
+
+### Works with trak
+
+[trak](https://github.com/Kathir-D/trak) is a terminal UI for Spotify. It
+talks to Spotify over AppleScript, so it works the same whether Spotify is
+normal or headless. When headless-spotify is installed, trak can use two
+commands:
+
+- **`headless-spotify status --json`** — trak reads `headless` to show a
+  "headless" badge. Any `schema` other than `1` should be treated as
+  unknown (see the contract below).
+- **`headless-spotify launch`** — starts Spotify in the background
+  (`activates:false`, so no focus steal and no Dock bounce) and waits up to
+  `--timeout` (default 10 s) for `player state`. Exit codes:
+
+  | Exit | Meaning |
+  |---|---|
+  | 0 | Spotify is running and answered `player state`, or was already running (then nothing is done) |
+  | 1 | Spotify is missing, could not be started, or did not answer in time (the reason is on stderr) |
+
+  `launch` is safe to call from another tool: it never edits `Info.plist`,
+  never re-signs, and never needs `sudo`. It does not hide Spotify either —
+  that is still `hide`/`install.sh`.
+
+### `status --json` contract
+
+`headless-spotify status --json` prints one JSON object on stdout. The exit
+code is the same as plain `status` (0 only when ready), so read stdout even
+on exit 1.
+
+```json
+{"app":"/Applications/Spotify.app","backup_present":false,"bundle":"com.spotify.client","dock":"visible","headless":false,"installed":true,"lsui_element":null,"player_state":"playing","ready":false,"running":true,"schema":1,"scriptable":true}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema` | int | Contract version, currently `1` |
+| `app` | string | Path to Spotify.app that was checked |
+| `bundle` | string | Always `com.spotify.client` |
+| `installed` | bool | Spotify.app and its `Info.plist` exist |
+| `running` | bool | A `Spotify` process is running |
+| `lsui_element` | bool or null | `LSUIElement` in `Info.plist`; null when absent or not installed |
+| `dock` | string | `visible`, `hidden`, `prohibited` or `notRunning` |
+| `headless` | bool | `lsui_element` is true or `dock` is `hidden` |
+| `player_state` | string or null | `playing`/`paused`/`stopped`; null when not running or not answering |
+| `scriptable` | bool | `player_state` is not null |
+| `backup_present` | bool | An `Info.plist` backup from `hide` exists |
+| `ready` | bool | installed, running, headless and scriptable |
+
+Versioning rules: new fields may be added under `schema` 1, so ignore keys
+you do not know. Renaming, removing or changing the type of a field bumps
+`schema`. The test suite pins the schema-1 fields
+(`StatusJSONContractTests`).
 
 ## Troubleshooting
 
