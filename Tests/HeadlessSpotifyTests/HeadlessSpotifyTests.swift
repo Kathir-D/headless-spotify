@@ -28,7 +28,7 @@ struct CLIParseTests {
         }
     }
 
-    @Test("subcommands parse", arguments: ["status", "hide", "restore", "watch", "control"])
+    @Test("subcommands parse", arguments: ["status", "launch", "hide", "restore", "watch", "control"])
     func subcommandsParse(name: String) throws {
         let result = CLI.parse(["headless-spotify", name])
         #expect(try result.get().subcommand == Subcommand(rawValue: name))
@@ -112,7 +112,7 @@ struct CLIParseTests {
     @Test("help text states the Sonar contract")
     func helpMentionsContract() {
         #expect(CLI.helpText.contains("com.spotify.client"))
-        #expect(CLI.helpText.contains("status|hide|restore"))
+        #expect(CLI.helpText.contains("status|launch|hide|restore"))
     }
 }
 
@@ -242,6 +242,105 @@ struct RunnerDryRunTests {
         let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         #expect(obj?["ready"] as? Bool == true)
         #expect(obj?["dock"] as? String == "hidden")
+    }
+}
+
+@Suite("launch (injected hooks, never starts Spotify)")
+struct LaunchTests {
+    final class Lines: @unchecked Sendable { var values: [String] = [] }
+    final class Flag: @unchecked Sendable { var value = false }
+
+    func hooks(
+        running: Bool, launched: Flag, launchError: Error? = nil, state: String? = "paused"
+    ) -> Runner.LaunchHooks {
+        Runner.LaunchHooks(
+            isRunning: { running },
+            launchHeadless: { _ in
+                launched.value = true
+                if let launchError { throw launchError }
+            },
+            waitForScripting: { _ in state }
+        )
+    }
+
+    /// Any existing path stands in for Spotify.app; hooks do the launching.
+    var existingApp: String { FileManager.default.temporaryDirectory.path }
+
+    @Test("already running → no-op, exit 0, no launch")
+    func alreadyRunning() async {
+        let launched = Flag(), out = Lines()
+        let code = await Runner.launch(
+            Invocation(subcommand: .launch, spotifyAppPath: "/nonexistent/Spotify.app"),
+            output: { out.values.append($0) }, errorOutput: { _ in },
+            hooks: hooks(running: true, launched: launched)
+        )
+        #expect(code == 0)
+        #expect(!launched.value)
+        #expect(out.values.joined().contains("already running"))
+    }
+
+    @Test("not running → launches, answers scripting, exit 0")
+    func launchesAndAnswers() async {
+        let launched = Flag(), out = Lines()
+        let code = await Runner.launch(
+            Invocation(subcommand: .launch, spotifyAppPath: existingApp),
+            output: { out.values.append($0) }, errorOutput: { _ in },
+            hooks: hooks(running: false, launched: launched)
+        )
+        #expect(code == 0)
+        #expect(launched.value)
+        #expect(out.values.joined().contains("paused"))
+    }
+
+    @Test("no scripting answer within timeout → exit 1 with message")
+    func timesOut() async {
+        let launched = Flag(), err = Lines()
+        let code = await Runner.launch(
+            Invocation(subcommand: .launch, spotifyAppPath: existingApp, timeout: 3),
+            output: { _ in }, errorOutput: { err.values.append($0) },
+            hooks: hooks(running: false, launched: launched, state: nil)
+        )
+        #expect(code == 1)
+        #expect(err.values.joined().contains("within 3s"))
+    }
+
+    @Test("launch error → exit 1")
+    func launchFails() async {
+        struct Boom: Error {}
+        let launched = Flag(), err = Lines()
+        let code = await Runner.launch(
+            Invocation(subcommand: .launch, spotifyAppPath: existingApp),
+            output: { _ in }, errorOutput: { err.values.append($0) },
+            hooks: hooks(running: false, launched: launched, launchError: Boom())
+        )
+        #expect(code == 1)
+        #expect(err.values.joined().contains("could not start"))
+    }
+
+    @Test("missing app → exit 1, no launch")
+    func missingApp() async {
+        let launched = Flag(), err = Lines()
+        let code = await Runner.launch(
+            Invocation(subcommand: .launch, spotifyAppPath: "/nonexistent/Spotify.app"),
+            output: { _ in }, errorOutput: { err.values.append($0) },
+            hooks: hooks(running: false, launched: launched)
+        )
+        #expect(code == 1)
+        #expect(!launched.value)
+        #expect(err.values.joined().contains("not found"))
+    }
+
+    @Test("--dry-run → plan, exit 0, no launch")
+    func dryRun() async {
+        let launched = Flag(), out = Lines()
+        let code = await Runner.launch(
+            Invocation(subcommand: .launch, spotifyAppPath: existingApp, dryRun: true),
+            output: { out.values.append($0) }, errorOutput: { _ in },
+            hooks: hooks(running: false, launched: launched)
+        )
+        #expect(code == 0)
+        #expect(!launched.value)
+        #expect(out.values.joined().contains("launch plan"))
     }
 }
 

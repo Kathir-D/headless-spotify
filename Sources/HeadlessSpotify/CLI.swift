@@ -9,6 +9,7 @@ import Foundation
 /// fully implemented in task 2.
 public enum Subcommand: String, Sendable, CaseIterable {
     case status
+    case launch
     case hide
     case restore
     case watch
@@ -114,13 +115,16 @@ public enum CLI: Sendable {
         headless-spotify \(version) — hide official Spotify from Dock + Cmd-Tab
 
         USAGE:
-          headless-spotify [--spotify-app <path>] [--timeout <s>] <status|hide|restore|watch>
+          headless-spotify [--spotify-app <path>] [--timeout <s>] <status|launch|hide|restore|watch>
           headless-spotify control <play|pause|toggle|next|previous|volume|set-volume N|volume-up|volume-down>
           headless-spotify --help | --version
 
         SUBCOMMANDS:
           status    Report Dock presence, LSUIElement, `player state` (exit 0 only
                     when headless + running + scriptable)
+          launch    Start Spotify in the background (activates:false) and wait
+                    up to --timeout for `player state`. No-op if Spotify is
+                    already running; never edits Info.plist, never needs sudo
           hide      Set LSUIElement=true, re-sign ad-hoc, relaunch headless
                     (activates:false), verify `player state` within --timeout.
                     --mode injector (or auto fallback) uses the accessory-policy
@@ -135,7 +139,7 @@ public enum CLI: Sendable {
 
         OPTIONS:
           --spotify-app <path>  Path to Spotify.app (default: \(defaultSpotifyAppPath))
-          --timeout <seconds>   AppleScript wait after relaunch (default: 10)
+          --timeout <seconds>   AppleScript wait after (re)launch (default: 10)
           --mode <auto|plist|injector>
                                 Hiding strategy for `hide` (default: auto)
           --injector <path>     Injector dylib path (default: install dir)

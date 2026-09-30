@@ -24,6 +24,8 @@ public enum Runner {
         switch invocation.subcommand {
         case .status:
             return await status(invocation, output: output, errorOutput: errorOutput)
+        case .launch:
+            return await launch(invocation, output: output, errorOutput: errorOutput)
         case .hide:
             return await hide(invocation, output: output, errorOutput: errorOutput)
         case .restore:
@@ -127,6 +129,58 @@ public enum Runner {
             return text
         }
         return "{}"
+    }
+
+    // MARK: - launch
+
+    /// Side-effecting hooks for `launch`, injectable so tests never start Spotify.
+    public struct LaunchHooks: Sendable {
+        public var isRunning: @Sendable () async -> Bool
+        public var launchHeadless: @Sendable (String) async throws -> Void
+        public var waitForScripting: @Sendable (TimeInterval) async -> String?
+
+        public static let live = LaunchHooks(
+            isRunning: { await SpotifyScripting.isSpotifyRunning() },
+            launchHeadless: { _ = try await SpotifyState.launchHeadless(appPath: $0) },
+            waitForScripting: { await SpotifyScripting.waitForScripting(timeout: $0) }
+        )
+    }
+
+    /// Start Spotify in the background (activates:false, same as install.sh
+    /// step 3) and wait for `player state`. Read-only toward the bundle: no
+    /// plist edit, no re-sign, no sudo. Exit 0 = running + scriptable (or
+    /// already running), 1 = could not start or did not answer in time.
+    static func launch(
+        _ inv: Invocation,
+        output: @Sendable (String) -> Void,
+        errorOutput: @Sendable (String) -> Void,
+        hooks: LaunchHooks = .live
+    ) async -> Int32 {
+        if await hooks.isRunning() {
+            output("launch: Spotify is already running — nothing to do")
+            return 0
+        }
+        guard FileManager.default.fileExists(atPath: inv.spotifyAppPath) else {
+            errorOutput("launch: Spotify not found at \(inv.spotifyAppPath) — install it or pass --spotify-app <path>")
+            return 1
+        }
+        if inv.dryRun {
+            output("launch plan: open \(inv.spotifyAppPath) in the background (activates:false), wait ≤\(Int(inv.timeout))s for `player state`. Info.plist untouched.")
+            return 0
+        }
+        do {
+            try await hooks.launchHeadless(inv.spotifyAppPath)
+        } catch {
+            errorOutput("launch: could not start Spotify: \(error.localizedDescription)")
+            return 1
+        }
+        guard let state = await hooks.waitForScripting(inv.timeout) else {
+            errorOutput("launch: Spotify did not answer AppleScript within \(Int(inv.timeout))s")
+            errorOutput("launch: if it quit on start, run `headless-spotify status` — Spotify ≥1.3.1 exits when LSUIElement is set (`headless-spotify restore` fixes that)")
+            return 1
+        }
+        output("launch: ready — player state: \(state)")
+        return 0
     }
 
     // MARK: - hide
