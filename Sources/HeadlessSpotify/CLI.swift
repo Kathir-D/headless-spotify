@@ -121,7 +121,8 @@ public enum CLI: Sendable {
 
         SUBCOMMANDS:
           status    Report Dock presence, LSUIElement, `player state` (exit 0 only
-                    when headless + running + scriptable)
+                    when headless + running + scriptable). --json output is a
+                    versioned contract ("schema": 1) read by Sonar and trak
           launch    Start Spotify in the background (activates:false) and wait
                     up to --timeout for `player state`. No-op if Spotify is
                     already running; never edits Info.plist, never needs sudo

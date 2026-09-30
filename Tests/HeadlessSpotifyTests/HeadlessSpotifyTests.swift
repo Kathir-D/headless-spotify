@@ -245,6 +245,70 @@ struct RunnerDryRunTests {
     }
 }
 
+/// Pins the `status --json` contract read by Sonar and trak. If this fails you
+/// changed a public interface: add fields freely, but a rename/removal/retype
+/// needs a `statusSchemaVersion` bump and a README "Companions" update.
+@Suite("status --json contract (schema 1)")
+struct StatusJSONContractTests {
+    func decode(_ report: Runner.StatusReport) throws -> [String: Any] {
+        let data = try #require(Runner.jsonStatus(report).data(using: .utf8))
+        return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    @Test("exact key set and schema version")
+    func keySet() throws {
+        let obj = try decode(Runner.StatusReport(
+            appPath: "/Applications/Spotify.app", installed: true, running: true,
+            lsuiElement: true, dock: .hidden, playerState: "playing", hasBackup: true
+        ))
+        #expect(Runner.statusSchemaVersion == 1)
+        #expect(obj["schema"] as? Int == 1)
+        #expect(Set(obj.keys) == [
+            "schema", "app", "bundle", "installed", "running", "lsui_element", "dock",
+            "headless", "player_state", "scriptable", "backup_present", "ready",
+        ])
+    }
+
+    @Test("field types and values, headless + ready")
+    func typesReady() throws {
+        let obj = try decode(Runner.StatusReport(
+            appPath: "/Applications/Spotify.app", installed: true, running: true,
+            lsuiElement: true, dock: .hidden, playerState: "playing", hasBackup: true
+        ))
+        #expect(obj["app"] as? String == "/Applications/Spotify.app")
+        #expect(obj["bundle"] as? String == "com.spotify.client")
+        #expect(obj["installed"] as? Bool == true)
+        #expect(obj["running"] as? Bool == true)
+        #expect(obj["lsui_element"] as? Bool == true)
+        #expect(obj["dock"] as? String == "hidden")
+        #expect(obj["headless"] as? Bool == true)
+        #expect(obj["player_state"] as? String == "playing")
+        #expect(obj["scriptable"] as? Bool == true)
+        #expect(obj["backup_present"] as? Bool == true)
+        #expect(obj["ready"] as? Bool == true)
+    }
+
+    @Test("not running: nullable fields are JSON null, dock is not_running")
+    func nullsWhenNotRunning() throws {
+        let obj = try decode(Runner.StatusReport(
+            appPath: "/Applications/Spotify.app", installed: true, running: false,
+            lsuiElement: nil, dock: .notRunning, playerState: nil, hasBackup: false
+        ))
+        #expect(obj["schema"] as? Int == 1)
+        #expect(obj["lsui_element"] is NSNull)
+        #expect(obj["player_state"] is NSNull)
+        #expect(obj["dock"] as? String == DockPresence.notRunning.rawValue)
+        #expect(obj["headless"] as? Bool == false)
+        #expect(obj["ready"] as? Bool == false)
+    }
+
+    @Test("dock values are the documented set")
+    func dockValues() {
+        #expect([DockPresence.visible, .hidden, .prohibited, .notRunning].map(\.rawValue)
+            == ["visible", "hidden", "prohibited", "notRunning"])
+    }
+}
+
 @Suite("launch (injected hooks, never starts Spotify)")
 struct LaunchTests {
     final class Lines: @unchecked Sendable { var values: [String] = [] }

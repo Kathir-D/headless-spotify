@@ -109,8 +109,14 @@ public enum Runner {
         return lines.joined(separator: "\n")
     }
 
+    /// Version of the `status --json` contract. Sonar and trak parse this
+    /// output, so fields are only ever added under the same version; renaming,
+    /// removing or retyping a field means bumping it (see README "Companions").
+    public static let statusSchemaVersion = 1
+
     static func jsonStatus(_ r: StatusReport) -> String {
         let dict: [String: Any] = [
+            "schema": statusSchemaVersion,
             "app": r.appPath,
             "bundle": CLI.bundleID,
             "installed": r.installed,
