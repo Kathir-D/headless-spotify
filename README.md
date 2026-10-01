@@ -1,3 +1,8 @@
+> [!WARNING]
+> **THIS WAS A VERY VIEBCODED PROJECT BECAUSE I DIDN"T WANT SPOTIFY IN MY DOCK**
+> 
+> Most likely no support, if it doesn't work for you, fork it and fix or make a issue in Github and I might try to fix it.
+
 # headless-spotify
 
 [![CI](https://github.com/Kathir-D/headless-spotify/actions/workflows/ci.yml/badge.svg)](https://github.com/Kathir-D/headless-spotify/actions)
