@@ -25,7 +25,7 @@ Run official Spotify on macOS with **no Dock icon and no Cmd-Tab entry** — win
 - [What it will not do to your Spotify](#what-it-will-not-do-to-your-spotify)
 - [Companions](#companions)
   - [Sonar](#sonar)
-  - [Works with trak](#works-with-trak)
+  - [Works with Trak](#works-with-trak)
   - [`status --json` contract](#status---json-contract)
 - [Troubleshooting](#troubleshooting)
 - [Uninstall](#uninstall)
@@ -259,7 +259,7 @@ Two behaviours are worth stating outright, because both used to surprise people:
 
 ```sh
 headless-spotify status            # Dock? LSUIElement? player state? (exit 0 only when headless+scriptable)
-headless-spotify status --json     # machine-readable, versioned ("schema": 1), for Sonar/trak/scripts
+headless-spotify status --json     # machine-readable, versioned ("schema": 1), for Sonar/Trak/scripts
 headless-spotify launch            # start Spotify in the background, wait ≤10 s for `player state`
                                   # no-op if already running; never edits Info.plist, no sudo
 headless-spotify hide              # auto: plist → injector fallback
@@ -409,7 +409,7 @@ tools are known to work with it:
 | Tool | What it is | What it uses from headless-spotify |
 |---|---|---|
 | [Sonar](https://github.com/Kathir-D/sonar) | Spotify controller | Nothing — it matches `com.spotify.client` + `player state`, same as normal Spotify |
-| [trak](https://github.com/Kathir-D/trak) | Terminal UI for Spotify | `status --json` for its "headless" badge; `launch` to start Spotify without stealing focus |
+| [Trak](https://github.com/Kathir-D/Trak) | Terminal UI for Spotify | `status --json` for its "headless" badge; `launch` to start Spotify without stealing focus |
 
 ### Sonar
 
@@ -424,14 +424,14 @@ Sonar needs no changes between rows. Today, only the Normal row runs on
 Spotify 1.3.1; the CLI enforces this honestly (`hide` exits 1, `status`
 reports not-headless, `restore` returns to normal).
 
-### Works with trak
+### Works with Trak
 
-[trak](https://github.com/Kathir-D/trak) is a terminal UI for Spotify. It
+[Trak](https://github.com/Kathir-D/Trak) is a terminal UI for Spotify. It
 talks to Spotify over AppleScript, so it works the same whether Spotify is
-normal or headless. When headless-spotify is installed, trak can use two
+normal or headless. When headless-spotify is installed, Trak can use two
 commands:
 
-- **`headless-spotify status --json`** — trak reads `headless` to show a
+- **`headless-spotify status --json`** — Trak reads `headless` to show a
   "headless" badge. Any `schema` other than `1` should be treated as
   unknown (see the contract below).
 - **`headless-spotify launch`** — starts Spotify in the background
